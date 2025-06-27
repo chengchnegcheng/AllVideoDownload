@@ -1,0 +1,11 @@
+{
+  "MAX_CONCURRENT_DOWNLOADS": 3,
+  "MAX_FILE_SIZE_MB": 1024,
+  "WHISPER_MODEL_SIZE": "large",
+  "WHISPER_DEVICE": "cpu",
+  "DOWNLOAD_PATH": "/www/AllVideoDownload/backend/data/downloads",
+  "HTTP_PROXY": "socks5://127.0.0.1:10808",
+  "HTTPS_PROXY": "socks5://127.0.0.1:10808",
+  "RATE_LIMIT_PER_MINUTE": 60,
+  "LOG_LEVEL": "INFO"
+}

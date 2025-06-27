@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/src/assets/logo.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AVD 全能视频下载器 Web版</title>
+    <meta name="description" content="现代化的全能视频下载器，支持多平台视频下载、AI字幕生成和翻译" />
+    <meta name="keywords" content="视频下载,YouTube,Bilibili,字幕生成,AI翻译" />
+    
+    <!-- Prevent FOUC (Flash of Unstyled Content) -->
+    <style>
+      #root {
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      
+      .loading {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        color: #1890ff;
+        font-size: 16px;
+      }
+      
+      .loading::after {
+        content: '...';
+        animation: loading 1.5s infinite;
+      }
+      
+      @keyframes loading {
+        0% { content: ''; }
+        25% { content: '.'; }
+        50% { content: '..'; }
+        75% { content: '...'; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root">
+      <div class="loading">正在加载 AVD Web版</div>
+    </div>
+    
+    <!-- 添加错误处理和调试信息 -->
+    <script>
+      console.log('HTML页面加载完成，准备加载React应用')
+      
+      // 监听未捕获的错误
+      window.addEventListener('error', function(e) {
+        console.error('JavaScript错误:', e.error, e.filename, e.lineno, e.colno)
+        const loading = document.querySelector('.loading')
+        if (loading) {
+          loading.innerHTML = `<div style="color: red;">JavaScript加载失败: ${e.error?.message || e.message}</div>`
+        }
+      })
+      
+      // 监听Promise错误
+      window.addEventListener('unhandledrejection', function(e) {
+        console.error('Promise错误:', e.reason)
+        const loading = document.querySelector('.loading')
+        if (loading) {
+          loading.innerHTML = `<div style="color: red;">Promise错误: ${e.reason}</div>`
+        }
+      })
+      
+      // 检查基础环境
+      console.log('浏览器环境检查:')
+      console.log('- document.getElementById可用:', typeof document.getElementById === 'function')
+      console.log('- ES6模块支持:', 'noModule' in document.createElement('script'))
+      console.log('- 用户代理:', navigator.userAgent)
+    </script>
+    
+    <!-- 加载超时检测 -->
+    <script>
+      // 设置加载超时检测
+      window.loadingTimeoutId = setTimeout(() => {
+        const loading = document.querySelector('.loading')
+        // 只有在loading元素还存在且仍显示"正在加载"时才显示超时消息
+        if (loading && loading.parentNode && loading.textContent && 
+            (loading.textContent.includes('正在加载') || loading.textContent.includes('正在'))) {
+          loading.innerHTML = `
+            <div style="color: orange; max-width: 500px; margin: 0 auto;">
+              <h3>⚠️ React应用5秒后仍未加载</h3>
+              <p>可能的原因：</p>
+              <ul style="text-align: left; display: inline-block; margin: 10px 0;">
+                <li>ES模块加载失败</li>
+                <li>TypeScript编译错误</li>
+                <li>网络连接问题</li>
+                <li>浏览器兼容性问题</li>
+              </ul>
+              <p style="font-size: 12px; opacity: 0.8;">检查浏览器控制台查看详细错误信息</p>
+              <button onclick="window.location.reload()" style="padding: 8px 16px; margin-top: 10px; background: #1890ff; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                重新加载页面
+              </button>
+            </div>
+          `
+        }
+      }, 5000)
+    </script>
+    
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html> 

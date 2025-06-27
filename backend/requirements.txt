@@ -1,0 +1,87 @@
+# Web框架和服务器
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+
+# 数据库和ORM
+sqlalchemy==2.0.23
+alembic==1.12.1
+
+# 数据验证和设置
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# 视频下载核心 - 2025年最新版本
+yt-dlp==2025.6.9
+
+# AI语音识别和翻译
+faster-whisper==0.10.0
+transformers==4.35.2
+torch==2.1.1
+librosa==0.10.1
+
+# 音视频处理
+ffmpeg-python==0.2.0
+
+# 浏览器自动化
+selenium==4.15.2
+webdriver-manager==4.0.1
+
+# 网络和HTTP
+httpx==0.13.3
+aiohttp==3.9.0
+requests==2.31.0
+
+# 文件处理
+aiofiles==23.2.1
+python-magic==0.4.27
+
+# 加密和安全
+cryptography==41.0.7
+passlib[bcrypt]==1.7.4
+python-jose[cryptography]==3.3.0
+
+# 任务队列（可选）
+celery==5.3.4
+redis==5.0.1
+
+# 日志和监控
+loguru==0.7.2
+python-json-logger==2.0.7
+
+# 工具和实用库
+python-dotenv==1.0.0
+typer==0.9.0
+rich==13.7.0
+tqdm==4.66.1
+click==8.1.7
+
+# 开发和测试
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-cov==4.1.0
+black==23.11.0
+isort==5.12.0
+flake8==6.1.0
+mypy==1.7.1
+
+# 类型注解
+types-requests==2.31.0.10
+types-redis==4.6.0.11
+
+# 翻译依赖
+sentencepiece==0.2.0
+googletrans==3.1.0a0
+pysrt==1.1.2
+langdetect==1.0.9
+deep-translator==1.11.4
+
+# 额外的依赖
+psutil==5.9.6
+schedule==1.2.0
+watchdog==3.0.0
+coloredlogs==15.0.1
+websockets==12.0
+soundfile==0.12.1
+ctranslate2==4.6.0
+humanfriendly==10.0 

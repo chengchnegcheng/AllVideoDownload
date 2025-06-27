@@ -1,0 +1,672 @@
+/* 应用全局样式 */
+.app-layout {
+  min-height: 100vh;
+  /* 确保根布局高度固定 */
+  height: 100vh;
+  overflow: hidden; /* 防止整体页面滚动 */
+}
+
+/* 侧边栏样式 */
+.app-sider {
+  box-shadow: 2px 0 6px rgba(0, 21, 41, 0.1);
+  /* 固定侧边栏 */
+  position: fixed !important;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 200;
+  overflow-y: auto; /* 允许侧边栏内部滚动 */
+}
+
+/* 为了给固定侧边栏让出空间，调整主布局的margin */
+.app-main-layout {
+  margin-left: 240px; /* 默认侧边栏宽度 */
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* 当侧边栏收缩时的样式 */
+.app-main-layout.collapsed {
+  margin-left: 80px; /* 收缩后的侧边栏宽度 */
+}
+
+.app-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 64px;
+  padding: 0 24px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+  margin-bottom: 16px;
+}
+
+.app-menu {
+  border-right: none;
+}
+
+/* 连接状态指示器 */
+.connection-status {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  transition: all 0.3s;
+}
+
+.connection-status.connected {
+  background: rgba(82, 196, 26, 0.1);
+  color: #52c41a;
+}
+
+.connection-status.disconnected {
+  background: rgba(255, 77, 79, 0.1);
+  color: #ff4d4f;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 8px;
+  background: currentColor;
+  animation: pulse 2s infinite;
+}
+
+.status-text {
+  font-weight: 500;
+}
+
+@keyframes pulse {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+/* 头部样式 */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  background: #fff;
+  border-bottom: 1px solid #f0f0f0;
+  box-shadow: 0 1px 4px rgba(0, 21, 41, 0.08);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.header-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: #262626;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+/* WebSocket状态指示器 */
+.ws-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.3s;
+}
+
+.ws-status.connected {
+  background: rgba(82, 196, 26, 0.1);
+  color: #52c41a;
+}
+
+.ws-status.connecting {
+  background: rgba(250, 173, 20, 0.1);
+  color: #faad14;
+}
+
+.ws-status.disconnected,
+.ws-status.error {
+  background: rgba(255, 77, 79, 0.1);
+  color: #ff4d4f;
+}
+
+.ws-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.ws-status.connected .ws-indicator {
+  animation: pulse 2s infinite;
+}
+
+/* 内容区域 */
+.app-content {
+  margin: 24px;
+  min-height: calc(100vh - 112px);
+  overflow-y: auto; /* 只有内容区域可以滚动 */
+  max-height: calc(100vh - 112px); /* 限制内容区域高度 */
+}
+
+.content-wrapper {
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  min-height: 500px;
+  padding: 24px;
+}
+
+/* 加载状态 */
+.app-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: #f5f5f5;
+}
+
+/* 暗色主题适配 */
+.ant-layout.app-layout[data-theme="dark"] .app-header {
+  background: #141414;
+  border-bottom-color: #303030;
+}
+
+.ant-layout.app-layout[data-theme="dark"] .header-title {
+  color: #fff;
+}
+
+.ant-layout.app-layout[data-theme="dark"] .content-wrapper {
+  background: #141414;
+  color: #fff;
+}
+
+/* 移动端标签页优化 */
+.tab-label {
+  margin-left: 4px;
+}
+
+@media (max-width: 480px) {
+  .tab-label {
+    display: none;
+  }
+  
+  .ant-tabs-tab {
+    padding: 8px 12px !important;
+  }
+  
+  .ant-tabs-tab .anticon {
+    margin: 0 !important;
+  }
+  
+  /* 移动端表单优化 */
+  .ant-form-item-label {
+    font-size: 14px !important;
+  }
+  
+  /* 移动端页面标题调整 */
+  .page-title,
+  .page-header h1,
+  .page-header h2,
+  .page-header h3 {
+    margin-left: 8px !important;
+  }
+  
+  .ant-input-number,
+  .ant-select,
+  .ant-input {
+    font-size: 16px !important; /* 防止iOS缩放 */
+  }
+  
+  .ant-card .ant-card-body {
+    padding: 16px !important;
+  }
+  
+  .ant-btn {
+    height: 44px !important; /* 更好的触摸目标 */
+  }
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  /* 移动端时隐藏侧边栏 */
+  .app-sider {
+    position: fixed !important;
+    z-index: 1000;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+    height: 100vh;
+  }
+  
+  /* 移动端侧边栏显示状态 */
+  .app-sider.mobile-show {
+    transform: translateX(0) !important;
+  }
+  
+  /* 移动端主布局占满屏幕 */
+  .app-main-layout {
+    margin-left: 0 !important;
+    width: 100%;
+  }
+  
+  .app-main-layout.collapsed {
+    margin-left: 0 !important;
+  }
+  
+  /* 移动端内容区域调整 */
+  .app-content {
+    margin: 8px;
+    margin-left: 60px; /* 为汉堡菜单按钮留出空间 */
+    max-height: calc(100vh - 80px);
+  }
+  
+  .content-wrapper {
+    padding: 12px;
+  }
+  
+  /* 移动端头部调整 */
+  .app-header {
+    padding: 0 12px;
+    padding-left: 60px; /* 为汉堡菜单按钮留出空间 */
+  }
+  
+  .header-title {
+    font-size: 16px;
+  }
+  
+  /* 移动端汉堡菜单按钮 */
+  .mobile-menu-button {
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    z-index: 1001;
+    background: #1890ff;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 8px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  }
+  
+  /* 移动端时添加遮罩层 */
+  .mobile-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 999;
+    display: none;
+  }
+  
+  .mobile-overlay.show {
+    display: block;
+  }
+}
+
+@media (max-width: 480px) {
+  .app-content {
+    margin: 8px;
+  }
+  
+  .page-container {
+    padding: 0;
+  }
+}
+
+/* 页面内容基础样式 */
+.page-container {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.page-header {
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.page-title {
+  font-size: 24px;
+  font-weight: 600;
+  color: #262626;
+  margin: 0;
+}
+
+.page-description {
+  color: #8c8c8c;
+  margin-top: 8px;
+}
+
+/* 卡片样式 */
+.info-card {
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  transition: all 0.3s;
+}
+
+.info-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* 统计数字样式 */
+.stat-number {
+  font-size: 32px;
+  font-weight: 700;
+  color: #1890ff;
+  line-height: 1;
+}
+
+.stat-label {
+  font-size: 14px;
+  color: #8c8c8c;
+  margin-top: 8px;
+}
+
+/* 新增页面样式 */
+
+/* 字幕页面样式 */
+.subtitle-form-card {
+  margin-bottom: 24px;
+}
+
+.subtitle-form-card .ant-card-head {
+  border-bottom: 2px solid #1890ff;
+}
+
+.task-item {
+  background: #fafafa;
+  border: 1px solid #e8e8e8;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+  transition: all 0.3s ease;
+}
+
+.task-item:hover {
+  border-color: #1890ff;
+  box-shadow: 0 2px 8px rgba(24, 144, 255, 0.15);
+}
+
+.progress-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+  font-size: 12px;
+  color: #666;
+}
+
+/* 系统页面样式 */
+.system-metric-card {
+  text-align: center;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+}
+
+.system-metric-card .ant-statistic-title {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.system-metric-card .ant-statistic-content {
+  color: white;
+}
+
+.performance-card {
+  background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+  border: none;
+  color: white;
+}
+
+.maintenance-card {
+  background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+  border: none;
+  color: white;
+}
+
+/* 历史页面样式 */
+.history-filter-bar {
+  background: #fff;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.status-tag-success {
+  background: linear-gradient(135deg, #52c41a, #73d13d);
+  border: none;
+  color: white;
+}
+
+.status-tag-processing {
+  background: linear-gradient(135deg, #faad14, #ffc53d);
+  border: none;
+  color: white;
+}
+
+.status-tag-failed {
+  background: linear-gradient(135deg, #ff4d4f, #ff7875);
+  border: none;
+  color: white;
+}
+
+/* 下载页面优化 */
+.download-form-container {
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 24px;
+  color: #262626;
+  margin-bottom: 24px;
+  border: 1px solid #f0f0f0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.download-form-container .ant-input,
+.download-form-container .ant-btn {
+  border-radius: 8px;
+}
+
+.download-task-card {
+  border-radius: 12px;
+  border: 1px solid #e8e8e8;
+  transition: all 0.3s ease;
+  margin-bottom: 16px;
+}
+
+.download-task-card:hover {
+  border-color: #1890ff;
+  box-shadow: 0 4px 12px rgba(24, 144, 255, 0.15);
+  transform: translateY(-2px);
+}
+
+.progress-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: #f0f0f0;
+  overflow: hidden;
+  margin: 8px 0;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #1890ff, #52c41a);
+  transition: width 0.3s ease;
+}
+
+/* 动画效果 */
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.page-container {
+  animation: slideInUp 0.3s ease-out;
+}
+
+/* 加载状态 */
+.loading-overlay {
+  position: relative;
+}
+
+.loading-overlay::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(2px);
+  z-index: 10;
+  border-radius: 8px;
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a1a1a1;
+}
+
+/* 暗色主题适配扩展 */
+[data-theme="dark"] .task-item {
+  background: #262626;
+  border-color: #434343;
+}
+
+[data-theme="dark"] .download-task-card {
+  background: #1f1f1f;
+  border-color: #434343;
+}
+
+[data-theme="dark"] .history-filter-bar {
+  background: #1f1f1f;
+  border: 1px solid #434343;
+}
+
+/* 下载任务动画效果 */
+@keyframes pulse {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.1);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 下载任务列表项动画 */
+.ant-list-item {
+  animation: fadeInUp 0.3s ease-out;
+}
+
+/* 下载中的任务背景效果 */
+.download-task-active {
+  background: linear-gradient(90deg, rgba(24, 144, 255, 0.05) 0%, rgba(24, 144, 255, 0.02) 100%) !important;
+  border-left: 3px solid #1890ff !important;
+}
+
+/* 已完成任务的背景效果 */
+.download-task-completed {
+  background: linear-gradient(90deg, rgba(82, 196, 26, 0.05) 0%, rgba(82, 196, 26, 0.02) 100%) !important;
+  border-left: 3px solid #52c41a !important;
+}
+
+/* 失败任务的背景效果 */
+.download-task-failed {
+  background: linear-gradient(90deg, rgba(255, 77, 79, 0.05) 0%, rgba(255, 77, 79, 0.02) 100%) !important;
+  border-left: 3px solid #ff4d4f !important;
+}
+
+/* 进度条动画优化 */
+.ant-progress-bg {
+  transition: all 0.3s ease;
+}
+
+/* 按钮组动画 */
+.ant-list-item-action {
+  animation: fadeInUp 0.3s ease-out 0.1s both;
+}
+
+/* 任务标题文字效果 */
+.task-title {
+  background: linear-gradient(45deg, #1890ff, #722ed1);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  font-weight: 600;
+}
+
+/* 状态标签优化 */
+.ant-tag {
+  border-radius: 12px;
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
+/* 悬停效果 */
+.ant-list-item:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  transform: translateY(-1px);
+  transition: all 0.2s ease;
+} 

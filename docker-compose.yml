@@ -31,7 +31,7 @@ services:
       dockerfile: Dockerfile
     container_name: avd-frontend
     ports:
-      - "3000:80"
+      - "3001:80"
     depends_on:
       - backend
     restart: unless-stopped
@@ -43,7 +43,7 @@ services:
     image: redis:7-alpine
     container_name: avd-redis
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - redis_data:/data
     command: redis-server --appendonly yes

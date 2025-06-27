@@ -1,0 +1,55 @@
+# 排除大文件和不必要的文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.tox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+.venv/
+venv/
+ENV/
+.env
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+.DS_Store
+Thumbs.db
+
+# 排除模型文件（生产环境会重新下载）
+data/models/
+data/downloads/
+data/uploads/
+data/logs/
+logs/
+
+# 排除开发文件
+.git/
+.gitignore
+README.md
+*.md
+tests/
+test_*
+*_test.py
+
+# 排除Jupyter相关
+.ipynb_checkpoints/
+*.ipynb
+
+# 排除IDE文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 排除大的依赖文件
+node_modules/

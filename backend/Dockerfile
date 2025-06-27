@@ -19,12 +19,12 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# 复制requirements文件
-COPY requirements.txt .
+# 复制生产环境依赖文件
+COPY requirements-prod.txt .
 
-# 安装Python依赖
-RUN pip install --upgrade pip && \
-    pip install -r requirements.txt
+# 配置pip使用国内镜像源并安装Python依赖
+RUN pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple && \
+    pip install -r requirements-prod.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 复制应用代码
 COPY . .
@@ -43,4 +43,4 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # 启动命令
-CMD ["python", "main.py"] 
+CMD ["python", "main.py"]

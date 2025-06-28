@@ -71,7 +71,7 @@ types-redis==4.6.0.11
 
 # 翻译依赖
 sentencepiece==0.2.0
-googletrans==4.0.0
+googletrans==4.0.1
 pysrt==1.1.2
 langdetect==1.0.9
 deep-translator==1.11.4

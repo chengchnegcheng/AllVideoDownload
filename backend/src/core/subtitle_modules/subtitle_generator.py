@@ -12,7 +12,7 @@ logger = get_logger(__name__)
 from ..config import settings
 from .audio_processor import AudioProcessor
 from .whisper_model_manager import WhisperModelManager
-from .subtitle_file_handler import SubtitleFileHandler
+from .subtitle_file_handler_enhanced import EnhancedSubtitleFileHandler
 
 
 class SubtitleGenerator:
@@ -22,7 +22,7 @@ class SubtitleGenerator:
         """初始化字幕生成器"""
         self.audio_processor = AudioProcessor()
         self.model_manager = WhisperModelManager()
-        self.file_handler = SubtitleFileHandler()
+        self.file_handler = EnhancedSubtitleFileHandler()
         logger.info("字幕生成器初始化完成")
     
     async def generate_from_video(self, 

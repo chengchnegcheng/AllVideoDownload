@@ -11,38 +11,34 @@ export default defineConfig({
     host: '0.0.0.0',
     strictPort: true,
     open: false,
-    allowedHosts: ['localhost', '127.0.0.1', '0.0.0.0', '192.168.1.137', '218.1.139.157', 'www.shcrystal.top'],
+    allowedHosts: ['localhost', '127.0.0.1', '0.0.0.0'],
     // 简化的代理配置
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8000',  // 明确使用IPv4地址
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
-        secure: false,
-        rewrite: (path) => {
-          console.log('Proxying API request:', path);
-          return path;
-        }
+        secure: false
       },
       '/ws': {
-        target: 'ws://127.0.0.1:8000',  // 明确使用IPv4地址
+        target: 'ws://127.0.0.1:8000',
         ws: true,
-        changeOrigin: true,
+        changeOrigin: true
       },
       // 静态文件代理
       '/downloads': {
-        target: 'http://127.0.0.1:8000',  // 明确使用IPv4地址
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
-        secure: false,
+        secure: false
       },
       '/uploads': {
-        target: 'http://127.0.0.1:8000',  // 明确使用IPv4地址
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
-        secure: false,
+        secure: false
       },
       '/files': {
-        target: 'http://127.0.0.1:8000',  // 统一文件访问路径
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
-        secure: false,
+        secure: false
       }
     }
   },
@@ -55,14 +51,14 @@ export default defineConfig({
     // 生产预览也添加代理
     proxy: {
       '/api': {
-        target: 'http://127.0.0.1:8000',  // 明确使用IPv4地址
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
-        secure: false,
+        secure: false
       },
       '/ws': {
-        target: 'ws://127.0.0.1:8000',  // 明确使用IPv4地址
+        target: 'ws://127.0.0.1:8000',
         ws: true,
-        changeOrigin: true,
+        changeOrigin: true
       }
     }
   },

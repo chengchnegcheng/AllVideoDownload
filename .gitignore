@@ -93,4 +93,7 @@ Thumbs.db
 desktop.ini
 
 # PID files
-.pids.* 
+.pids.*
+
+# Serena AI Assistant files
+.serena/ 

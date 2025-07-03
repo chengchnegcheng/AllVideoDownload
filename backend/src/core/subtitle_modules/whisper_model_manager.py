@@ -23,20 +23,20 @@ class WhisperModelManager:
         self.model_cache = {}
         self.current_model = None
         self.current_model_size = None
-        # 设置默认最高品质模型
-        self.default_model_size = "large-v3"
-        logger.info("Whisper模型管理器初始化完成（默认最高品质large-v3）")
+        # 设置默认中等性能模型（速度质量平衡）
+        self.default_model_size = "medium"  # 从large-v3改为medium以提升速度
+        logger.info("Whisper模型管理器初始化完成（默认medium模型：速度质量平衡）")
     
     def get_available_models(self) -> list:
-        """获取可用的模型列表（按品质排序）"""
+        """获取可用的模型列表（按推荐度排序）"""
         return [
-            "large-v3",  # 最高品质（默认）
-            "large-v2", 
-            "large", 
-            "medium", 
-            "small", 
-            "base",
-            "tiny"
+            "large-v3",  # 推荐：最高品质模型（默认）
+            "large-v2",  # 高品质：较新的大模型
+            "large",     # 高品质：标准大模型
+            "medium",    # 平衡：中等性能和品质
+            "small",     # 快速：较好的性能
+            "base",      # 基础：轻量级选择
+            "tiny"       # 最快：最小模型
         ]
     
     def get_model_info(self) -> Dict[str, Any]:
@@ -62,7 +62,7 @@ class WhisperModelManager:
                 "compute_type": settings.WHISPER_COMPUTE_TYPE,
                 "model_path": settings.MODELS_PATH,
                 "available_models": self.get_available_models(),
-                "quality_mode": "最高品质模式（默认large-v3）"
+                "quality_mode": "平衡性能模式（默认medium）"
             }
             
             # 添加CUDA详细信息
@@ -132,17 +132,23 @@ class WhisperModelManager:
         try:
             device = self._get_current_device()
             
+            # 为CPU模式设置性能优化
+            if device == "cpu":
+                self._setup_cpu_optimization()
+            
             # 根据设备类型智能选择计算类型
             compute_type = self._get_optimal_compute_type(device)
             
-            logger.info(f"加载Whisper模型: {model_size}（最高品质模式）, 设备: {device}, 计算类型: {compute_type}")
+            logger.info(f"加载Whisper模型: {model_size}（性能优化模式）, 设备: {device}, 计算类型: {compute_type}")
             
             model = WhisperModel(
                 model_size,
                 device=device,
                 compute_type=compute_type,
                 local_files_only=False,
-                download_root=settings.MODELS_PATH
+                download_root=settings.MODELS_PATH,
+                num_workers=self._get_optimal_num_workers(device),
+                cpu_threads=self._get_optimal_cpu_threads()
             )
             
             # 缓存模型
@@ -150,7 +156,7 @@ class WhisperModelManager:
             self.current_model = model
             self.current_model_size = model_size
             
-            logger.info(f"Whisper模型加载成功: {model_size}（最高品质）")
+            logger.info(f"Whisper模型加载成功: {model_size}（性能优化）")
             
             return model
             
@@ -159,33 +165,115 @@ class WhisperModelManager:
             raise
     
     def _get_optimal_compute_type(self, device: str) -> str:
-        """获取最优的计算类型（针对最高品质优化）"""
-        compute_type = settings.WHISPER_COMPUTE_TYPE
-        
+        """获取最优的计算类型（解除内存限制，优先性能）"""
+        # 解除内存限制，优先使用更高精度的计算类型
         if device == "cpu":
-            # CPU模式下，使用float32确保最佳质量
+            # CPU模式下，使用float32获得最佳精度（解除内存限制）
             compute_type = "float32"
-            logger.info("CPU模式：使用float32以确保最高品质")
+            logger.info("CPU模式：使用float32以获得最佳精度（已解除内存限制）")
         elif device == "cuda":
-            # GPU模式下，优先使用float16以提高性能，但保持质量
+            # GPU模式下，优先使用float16以提高性能
             if torch.cuda.is_available():
                 try:
                     # 检查GPU是否支持半精度
                     props = torch.cuda.get_device_properties(0)
                     if props.major >= 7:  # Volta架构及以上支持Tensor Cores
                         compute_type = "float16"
-                        logger.info("GPU模式：使用float16（Tensor Cores）以获得最佳性能和质量平衡")
+                        logger.info("GPU模式：使用float16（Tensor Cores）以获得最佳性能")
                     else:
                         compute_type = "float32"
-                        logger.info("GPU模式：使用float32以确保最高品质")
+                        logger.info("GPU模式：使用float32以获得最佳精度")
                 except Exception:
                     compute_type = "float32"
+            else:
+                compute_type = "float32"
+        else:
+            # 默认使用float32获得最佳精度
+            compute_type = "float32"
+            logger.info("默认模式：使用float32以获得最佳精度（已解除内存限制）")
         
         return compute_type
+
+    def _get_optimal_num_workers(self, device: str) -> int:
+        """获取最优的工作进程数（解除进程数限制）"""
+        if device == "cpu":
+            # CPU模式下，充分利用所有CPU核心（解除进程数限制）
+            import multiprocessing
+            cpu_count = multiprocessing.cpu_count()
+            
+            # 解除进程数限制，使用更多工作进程提升性能
+            if cpu_count >= 16:
+                num_workers = min(cpu_count * 3 // 4, 16)  # 使用3/4核心数，最多16个
+            elif cpu_count >= 8:
+                num_workers = min(cpu_count, 12)  # 使用所有核心，最多12个
+            elif cpu_count >= 4:
+                num_workers = cpu_count  # 使用所有核心
+            else:
+                num_workers = max(cpu_count, 2)  # 至少2个进程
+            
+            logger.info(f"CPU模式：使用 {num_workers} 个工作进程（总CPU核心数: {cpu_count}，已解除进程数限制）")
+            return num_workers
+        else:
+            # GPU模式下使用适度的工作进程
+            return 2
+    
+    def _get_optimal_cpu_threads(self) -> int:
+        """获取最优的CPU线程数（高性能模式）"""
+        import multiprocessing
+        cpu_count = multiprocessing.cpu_count()
+        
+        # 高性能模式：充分利用所有CPU资源
+        if cpu_count >= 16:
+            # 高性能CPU：使用所有核心
+            cpu_threads = cpu_count
+        elif cpu_count >= 8:
+            # 中高性能CPU：使用所有核心
+            cpu_threads = cpu_count
+        elif cpu_count >= 4:
+            # 中等性能CPU：使用所有核心
+            cpu_threads = cpu_count
+        else:
+            # 低性能CPU：使用所有可用核心
+            cpu_threads = cpu_count
+        
+        logger.info(f"高性能模式CPU线程配置：{cpu_threads} 个线程（总CPU核心数: {cpu_count}）")
+        return cpu_threads
+
+    def _setup_cpu_optimization(self):
+        """设置CPU性能优化环境变量（高性能模式）"""
+        import os
+        import multiprocessing
+        
+        cpu_count = multiprocessing.cpu_count()
+        
+        # 高性能模式：设置OpenMP线程数（用于数学库优化）
+        os.environ['OMP_NUM_THREADS'] = str(cpu_count)
+        
+        # 设置MKL线程数（Intel数学库优化）
+        os.environ['MKL_NUM_THREADS'] = str(cpu_count)
+        
+        # 设置BLAS线程数（基础线性代数库优化）
+        os.environ['OPENBLAS_NUM_THREADS'] = str(cpu_count)
+        
+        # 高性能模式：优化内存分配策略
+        os.environ['MALLOC_ARENA_MAX'] = '4'  # 限制内存分配区域数量
+        
+        # 设置PyTorch线程数（高性能模式）
+        import torch
+        torch.set_num_threads(cpu_count)
+        
+        # 设置线程间并行处理（充分利用多核）
+        torch.set_num_interop_threads(cpu_count)
+        
+        # 启用PyTorch性能优化（如果可用）
+        if hasattr(torch.backends.mkldnn, 'enabled'):
+            torch.backends.mkldnn.enabled = True
+        
+        logger.info(f"高性能CPU优化已启用：使用 {cpu_count} 个线程进行并行计算（已解除内存限制）")
     
     def get_model_specific_options(self, model_size: str, language: str) -> dict:
         """
-        根据模型大小获取特定的转录选项（最高品质配置）
+        根据模型大小获取特定的转录选项（高速优化配置）
         
         Args:
             model_size: 模型大小
@@ -194,75 +282,75 @@ class WhisperModelManager:
         Returns:
             dict: 转录选项
         """
-        # 如果未指定模型，使用默认最高品质模型
+        # 如果未指定模型，使用默认平衡性能模型
         if not model_size:
             model_size = self.default_model_size
         
-        # 基础高品质配置
+        # 高速优化基础配置
         base_options = {
             "language": None if language == "auto" else language,
-            "beam_size": 8,  # 增加束搜索以提高质量
-            "best_of": 8,    # 增加候选数以提高质量
-            "patience": 2.0,  # 增加耐心值以获得更好结果
-            "vad_filter": True,  # 启用VAD过滤噪音
+            "beam_size": 1,  # 高速优化：使用最小束搜索（greedy decode）
+            "best_of": 1,    # 高速优化：只生成一个候选
+            "patience": 0.5,  # 高速优化：最小耐心值
+            "vad_filter": True,  # 启用VAD过滤减少处理量
             "vad_parameters": dict(
-                threshold=0.3,  # 较低阈值以保留更多音频
-                min_silence_duration_ms=500  # 较短静音时长以保留细节
+                threshold=0.5,  # 稍高阈值快速过滤
+                min_silence_duration_ms=600  # 减少静音时长，快速切分
             ),
-            "temperature": [0.0, 0.2, 0.4],  # 使用温度采样提高质量
+            "temperature": [0.0],  # 高速优化：只使用确定性解码
             "compression_ratio_threshold": 2.4,  # 压缩比阈值
             "no_speech_threshold": 0.6,  # 无语音阈值
-            "condition_on_previous_text": True,  # 基于前文上下文
-            "initial_prompt": None,  # 可以设置初始提示
+            "condition_on_previous_text": False,  # 高速优化：不依赖前文上下文
+            "initial_prompt": None,  # 无初始提示
             "without_timestamps": False,  # 保留时间戳
-            "max_initial_timestamp": 1.0  # 最大初始时间戳
+            "max_initial_timestamp": 1.0,  # 最大初始时间戳
+            "word_timestamps": False,  # 高速优化：禁用单词级时间戳
+            "hallucination_silence_threshold": 2.0  # 减少幻觉检测时间
         }
         
-        # 根据模型大小调整参数（所有模型都使用高品质配置）
+        # 根据模型大小调整参数（所有模型都使用高速优化配置）
         if "large" in model_size:
-            # large模型使用最高质量参数
+            # large模型：平衡速度和质量
             base_options.update({
-                "beam_size": 10,  # 最大束搜索
-                "best_of": 10,    # 最大候选数
-                "patience": 2.5,  # 最大耐心值
-                "vad_filter": False,  # 大模型可以处理噪音
-                "temperature": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]  # 更多温度选项
+                "beam_size": 2,  # 适度束搜索平衡速度质量
+                "best_of": 2,    # 适度候选数
+                "patience": 0.8,  # 适度耐心值
+                "temperature": [0.0, 0.2]  # 最多两个温度选项
             })
             
         elif "medium" in model_size:
-            # medium模型高品质参数
+            # medium模型：快速参数
             base_options.update({
-                "beam_size": 8,
-                "best_of": 8,
-                "patience": 2.0
+                "beam_size": 1,
+                "best_of": 1,
+                "patience": 0.5
             })
             
         elif "small" in model_size:
-            # small模型优化参数
+            # small模型：极速参数
             base_options.update({
-                "beam_size": 6,
-                "best_of": 6,
-                "patience": 1.5
+                "beam_size": 1,
+                "best_of": 1,
+                "patience": 0.3
             })
             
         elif "base" in model_size:
-            # base模型平衡参数
+            # base模型：超快参数
             base_options.update({
-                "beam_size": 5,
-                "best_of": 5,
-                "patience": 1.2
+                "beam_size": 1,
+                "best_of": 1,
+                "patience": 0.2
             })
             
         elif "tiny" in model_size:
-            # tiny模型保守参数
+            # tiny模型：极速参数
             base_options.update({
-                "beam_size": 3,
-                "best_of": 3,
-                "patience": 1.0,
-                "vad_filter": True,  # tiny模型需要VAD过滤
+                "beam_size": 1,
+                "best_of": 1,
+                "patience": 0.1,
                 "vad_parameters": dict(
-                    threshold=0.4,
-                    min_silence_duration_ms=800
+                    threshold=0.6,
+                    min_silence_duration_ms=500
                 )
             })
         
@@ -270,7 +358,7 @@ class WhisperModelManager:
         if ".en" in model_size:
             base_options["language"] = "en"
         
-        logger.info(f"为模型 {model_size} 配置最高品质参数: beam_size={base_options['beam_size']}")
+        logger.info(f"为模型 {model_size} 配置高速优化参数: beam_size={base_options['beam_size']}, 快速模式已启用")
         
         return base_options
     

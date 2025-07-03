@@ -1,31 +1,20 @@
 #!/bin/bash
 
-# AVD Web版本 - 停止服务脚本 v2.1.0
-# 支持本地、IP和域名访问的全能视频下载器
-# 用法: ./stop.sh [command] [options]
+# AVD Web版本 - 停止服务脚本 (Linux)
+# 精确停止前后端服务，不影响其他服务
 
-set -e
-
-# 颜色定义
+# 设置颜色
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-PURPLE='\033[0;35m'
-CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# 项目配置
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOGS_DIR="$PROJECT_ROOT/logs"
+# 项目根目录
+PROJECT_ROOT=$(cd "$(dirname "$0")/.." && pwd)
 PIDS_FILE="$PROJECT_ROOT/.pids"
 
-# 网络配置
-BACKEND_PORT=8000
-FRONTEND_PORT=3000
-DOMAIN_NAME="www.shcrystal.top"
-
-# 打印彩色输出
+# 打印函数
 print_info() {
     echo -e "${BLUE}[INFO]${NC} $1"
 }
@@ -42,636 +31,333 @@ print_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
-print_network() {
-    echo -e "${CYAN}[NETWORK]${NC} $1"
-}
-
-print_tip() {
-    echo -e "${PURPLE}[TIP]${NC} $1"
-}
-
 # 显示横幅
 show_banner() {
-    echo -e "${RED}"
-    echo "╔══════════════════════════════════════════════════╗"
-    echo "║              AVD Web版本 v2.1.0                 ║"
-    echo "║           全能视频下载器停止脚本                 ║"
-    echo "║          🛑 安全停止所有服务                     ║"
-    echo "╚══════════════════════════════════════════════════╝"
-    echo -e "${NC}"
-}
-
-# 检查命令是否存在
-check_command() {
-    if ! command -v "$1" &> /dev/null; then
-        return 1
-    fi
-    return 0
+    echo -e "${BLUE}=================================="
+    echo "    AVD Web版本 - 停止服务"
+    echo "    全能视频下载器 v2.1.0"
+    echo -e "==================================${NC}"
+    echo
 }
 
 # 检查端口是否被占用
 check_port() {
     local port=$1
-    if command -v lsof &> /dev/null; then
-        lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1
-    elif command -v netstat &> /dev/null; then
-        netstat -an | grep ":$port " | grep -q LISTEN
-    elif command -v ss &> /dev/null; then
-        ss -ln | grep ":$port " >/dev/null 2>&1
-    else
+    netstat -tlnp 2>/dev/null | grep ":$port " >/dev/null
+    return $?
+}
+
+# 获取占用端口的进程PID
+get_port_pid() {
+    local port=$1
+    netstat -tlnp 2>/dev/null | grep ":$port " | awk '{print $7}' | cut -d'/' -f1
+}
+
+# 检查进程是否属于当前项目
+is_project_process() {
+    local pid=$1
+    if [[ -z "$pid" || "$pid" == "-" ]]; then
         return 1
     fi
-}
-
-# 获取端口占用进程信息
-get_port_process() {
-    local port=$1
-    local pids=""
     
-    if command -v lsof &> /dev/null; then
-        pids=$(lsof -ti :$port 2>/dev/null || true)
-    elif command -v netstat &> /dev/null; then
-        pids=$(netstat -tlnp 2>/dev/null | grep ":$port " | awk '{print $7}' | cut -d'/' -f1 | grep -v '-' || true)
-    elif command -v ss &> /dev/null; then
-        pids=$(ss -tlnp 2>/dev/null | grep ":$port " | sed 's/.*pid=\([0-9]*\).*/\1/' || true)
+    # 获取进程的工作目录和命令行
+    local cwd=$(readlink -f "/proc/$pid/cwd" 2>/dev/null)
+    local cmdline=$(cat "/proc/$pid/cmdline" 2>/dev/null | tr '\0' ' ')
+    
+    # 检查是否在项目目录下运行
+    if [[ "$cwd" =~ "$PROJECT_ROOT" ]]; then
+        return 0
     fi
     
-    echo "$pids"
+    # 检查命令行是否包含项目相关内容
+    if [[ "$cmdline" =~ "$PROJECT_ROOT" ]] || [[ "$cmdline" =~ "main.py" ]] || [[ "$cmdline" =~ "vite.*3000" ]] || [[ "$cmdline" =~ "npm.*serve" ]]; then
+        return 0
+    fi
+    
+    return 1
 }
 
-# 强制停止端口上的进程
+# 安全停止端口上的进程（只停止项目相关进程）
 kill_port_process() {
     local port=$1
-    local service_name=${2:-"服务"}
+    print_info "检查端口 $port 上的进程..."
     
-    if ! check_port $port; then
-        print_success "端口 $port 未被占用"
-        return 0
-    fi
+    # 获取所有占用该端口的PID
+    local pids=$(netstat -tlnp 2>/dev/null | grep ":$port " | awk '{print $7}' | cut -d'/' -f1 | sort -u)
     
-    local pids=$(get_port_process $port)
+    local found_project_process=false
     
-    if [ -n "$pids" ]; then
-        print_info "正在停止端口 $port 上的 $service_name 进程..."
-        
-        # 尝试优雅停止
         for pid in $pids; do
-            if kill -0 $pid 2>/dev/null; then
-                print_info "停止进程 $pid (端口 $port)"
-                kill $pid 2>/dev/null || true
-            fi
-        done
-        
+        if [[ -n "$pid" && "$pid" != "-" ]]; then
+            # 检查是否是项目相关进程
+            if is_project_process "$pid"; then
+                found_project_process=true
+                print_info "停止项目进程 PID: $pid (端口 $port)"
+                
+                # 先尝试温和停止
+                kill "$pid" 2>/dev/null
         sleep 2
         
-        # 检查是否还有进程
-        local remaining_pids=$(get_port_process $port)
-        if [ -n "$remaining_pids" ]; then
-            print_warning "强制停止端口 $port 上的残留进程..."
-            for pid in $remaining_pids; do
-                if kill -0 $pid 2>/dev/null; then
-                    kill -9 $pid 2>/dev/null || true
+                # 检查进程是否还在运行
+                if kill -0 "$pid" 2>/dev/null; then
+                    print_warning "进程 $pid 未响应，强制停止..."
+                    kill -9 "$pid" 2>/dev/null
+                    sleep 1
                 fi
-            done
-            sleep 1
-        fi
-        
-        # 最终检查
-        if check_port $port; then
-            print_warning "端口 $port 仍被占用，尝试使用 fuser 强制释放"
-            if command -v fuser &> /dev/null; then
-                fuser -k ${port}/tcp 2>/dev/null || true
-                sleep 1
+                
+                if ! kill -0 "$pid" 2>/dev/null; then
+                    print_success "进程 $pid 已停止"
+                else
+                    print_error "无法停止进程 $pid"
+                fi
+            else
+                local cmdline=$(cat "/proc/$pid/cmdline" 2>/dev/null | tr '\0' ' ')
+                print_info "跳过非项目进程 PID: $pid (命令: ${cmdline:0:50}...)"
             fi
         fi
+    done
         
-        if ! check_port $port; then
-            print_success "端口 $port ($service_name) 已释放"
-        else
-            print_error "端口 $port 释放失败"
-        fi
+    if [[ "$found_project_process" == "false" ]]; then
+        if check_port "$port"; then
+            print_info "端口 $port 上没有项目相关进程"
     else
-        print_warning "无法获取端口 $port 的进程信息"
+            print_info "端口 $port 未被占用"
+        fi
     fi
 }
 
-# 停止Docker服务
-stop_docker() {
-    print_info "🐳 停止Docker服务..."
+# 停止Python main.py进程（只停止项目相关的）
+stop_python_main() {
+    print_info "停止项目的Python main.py进程..."
     
-    cd "$PROJECT_ROOT"
+    # 查找在项目目录下运行main.py的Python进程
+    local pids=$(ps aux | grep "python.*main.py" | grep -v grep | grep "$PROJECT_ROOT" | awk '{print $2}')
     
-    if [ ! -f "docker-compose.yml" ]; then
-        print_warning "未找到docker-compose.yml文件"
-        return 0
-    fi
-    
-    if ! check_command "docker-compose"; then
-        print_error "未找到docker-compose命令"
-        return 1
-    fi
-    
-    # 检查是否有容器在运行
-    local running_containers=$(docker-compose ps -q 2>/dev/null || true)
-    
-    if [ -z "$running_containers" ]; then
-        print_success "Docker容器未运行"
-        return 0
-    fi
-    
-    print_info "停止Docker容器..."
-    docker-compose down --remove-orphans 2>/dev/null || {
-        print_warning "正常停止失败，尝试强制停止..."
-        docker-compose kill 2>/dev/null || true
-        docker-compose down --remove-orphans 2>/dev/null || true
-    }
-    
-    # 验证容器是否已停止
-    local remaining_containers=$(docker-compose ps -q 2>/dev/null || true)
-    if [ -z "$remaining_containers" ]; then
-        print_success "Docker服务已停止"
+    if [[ -n "$pids" ]]; then
+        for pid in $pids; do
+            print_info "停止项目Python进程 PID: $pid"
+            kill "$pid" 2>/dev/null
+            sleep 2
+            
+            if kill -0 "$pid" 2>/dev/null; then
+                print_warning "强制停止Python进程 $pid"
+                kill -9 "$pid" 2>/dev/null
+            fi
+        done
+        print_success "项目Python main.py进程已停止"
     else
-        print_error "部分Docker容器停止失败"
-        print_tip "手动清理: docker-compose down --remove-orphans --volumes"
+        print_info "未找到运行中的项目Python main.py进程"
+    fi
+}
+
+# 停止项目的Node.js进程
+stop_node_processes() {
+    print_info "停止项目的Node.js进程..."
+    
+    # 查找项目目录下的npm、yarn、node等进程
+    local node_pids=$(ps aux | grep -E "(npm|yarn|node.*serve|node.*dev|vite)" | grep -v grep | grep "$PROJECT_ROOT" | awk '{print $2}')
+    
+    if [[ -n "$node_pids" ]]; then
+        for pid in $node_pids; do
+            print_info "停止项目Node.js进程 PID: $pid"
+            kill "$pid" 2>/dev/null
+            sleep 1
+        done
+        print_success "项目Node.js进程已停止"
+    else
+        print_info "未找到运行中的项目Node.js进程"
     fi
 }
 
 # 停止通过PID文件记录的服务
 stop_pid_services() {
-    print_info "📋 停止PID记录的服务..."
-    
-    local stopped_count=0
-    
     # 停止后端
-    if [ -f "$PIDS_FILE.backend" ]; then
+    if [[ -f "$PIDS_FILE.backend" ]]; then
         local backend_pid=$(cat "$PIDS_FILE.backend" 2>/dev/null)
-        if [ -n "$backend_pid" ] && kill -0 $backend_pid 2>/dev/null; then
-            print_info "停止后端服务 (PID: $backend_pid)"
-            kill $backend_pid 2>/dev/null || true
-            sleep 2
-            
-            # 强制停止
-            if kill -0 $backend_pid 2>/dev/null; then
-                print_warning "强制停止后端服务"
-                kill -9 $backend_pid 2>/dev/null || true
-            fi
-            
+        if [[ -n "$backend_pid" ]]; then
+            if kill -0 "$backend_pid" 2>/dev/null; then
+                kill "$backend_pid" 2>/dev/null
             print_success "后端服务已停止 (PID: $backend_pid)"
-            ((stopped_count++))
         else
-            print_info "后端服务进程不存在或已停止"
+                print_info "后端服务进程不存在"
+            fi
         fi
         rm -f "$PIDS_FILE.backend"
     fi
     
     # 停止前端
-    if [ -f "$PIDS_FILE.frontend" ]; then
+    if [[ -f "$PIDS_FILE.frontend" ]]; then
         local frontend_pid=$(cat "$PIDS_FILE.frontend" 2>/dev/null)
-        if [ -n "$frontend_pid" ] && kill -0 $frontend_pid 2>/dev/null; then
-            print_info "停止前端服务 (PID: $frontend_pid)"
-            kill $frontend_pid 2>/dev/null || true
-            sleep 2
-            
-            # 强制停止
-            if kill -0 $frontend_pid 2>/dev/null; then
-                print_warning "强制停止前端服务"
-                kill -9 $frontend_pid 2>/dev/null || true
-            fi
-            
+        if [[ -n "$frontend_pid" ]]; then
+            if kill -0 "$frontend_pid" 2>/dev/null; then
+                kill "$frontend_pid" 2>/dev/null
             print_success "前端服务已停止 (PID: $frontend_pid)"
-            ((stopped_count++))
         else
-            print_info "前端服务进程不存在或已停止"
+                print_info "前端服务进程不存在"
+            fi
         fi
         rm -f "$PIDS_FILE.frontend"
     fi
-    
-    if [ $stopped_count -eq 0 ]; then
-        print_info "没有找到PID记录的服务"
-    fi
 }
 
-# 停止相关进程
-stop_related_processes() {
-    print_info "🔄 停止相关进程..."
-    
-    local killed_count=0
-    
-    # 定义进程模式和描述
-    local processes=(
-        "npm.*dev:npm开发服务器"
-        "serve.*dist:serve生产服务器"
-        "python.*main.py:Python主程序"
-        "python.*uvicorn:uvicorn服务器"
-        "vite.*dev:Vite开发服务器"
-        "node.*vite:Node.js Vite进程"
-        "fastapi.*:FastAPI应用"
-        "celery.*:Celery任务队列"
-    )
-    
-    for process_info in "${processes[@]}"; do
-        local pattern=${process_info%:*}
-        local description=${process_info#*:}
-        
-        if pkill -f "$pattern" 2>/dev/null; then
-            print_success "已停止 $description"
-            ((killed_count++))
-            sleep 0.5
-        fi
-    done
-    
-    if [ $killed_count -eq 0 ]; then
-        print_info "没有找到相关的运行进程"
-    else
-        print_success "共停止了 $killed_count 个相关进程"
-    fi
-}
-
-# 清理临时文件和缓存
+# 清理项目临时文件
 cleanup_temp_files() {
-    print_info "🧹 清理临时文件..."
+    print_info "清理项目临时文件..."
     
-    local cleaned_count=0
+    # 只清理项目相关的文件
+    rm -f "$PIDS_FILE".*
+    rm -f "$PROJECT_ROOT/.lock"
+    rm -f "$PROJECT_ROOT/backend/.lock"
+    rm -f "$PROJECT_ROOT/frontend/.lock"
+    rm -f "$PROJECT_ROOT/server.log"
     
-    # 清理PID文件
-    if rm -f "$PIDS_FILE".* 2>/dev/null; then
-        print_success "清理PID文件"
-        ((cleaned_count++))
-    fi
-    
-    # 清理锁文件
-    local lock_files=(
-        "$PROJECT_ROOT/.lock"
-        "$PROJECT_ROOT/backend/.lock"
-        "$PROJECT_ROOT/frontend/.lock"
-        "$PROJECT_ROOT/backend/app.lock"
-        "$PROJECT_ROOT/frontend/vite.lock"
-    )
-    
-    for lock_file in "${lock_files[@]}"; do
-        if [ -f "$lock_file" ]; then
-            rm -f "$lock_file"
-            print_success "清理锁文件: $(basename $lock_file)"
-            ((cleaned_count++))
-        fi
-    done
-    
-    # 清理临时下载文件
-    if [ -d "$PROJECT_ROOT/backend/data/downloads" ]; then
-        local temp_files=$(find "$PROJECT_ROOT/backend/data/downloads" -name "*.tmp" -o -name "*.temp" 2>/dev/null | wc -l)
-        if [ $temp_files -gt 0 ]; then
-            find "$PROJECT_ROOT/backend/data/downloads" -name "*.tmp" -o -name "*.temp" -delete 2>/dev/null || true
-            print_success "清理下载临时文件 ($temp_files 个)"
-            ((cleaned_count++))
-        fi
-    fi
-    
-    # 清理Node.js缓存
-    if [ -d "$PROJECT_ROOT/frontend/.cache" ]; then
-        rm -rf "$PROJECT_ROOT/frontend/.cache"
-        print_success "清理前端缓存"
-        ((cleaned_count++))
-    fi
-    
-    if [ $cleaned_count -eq 0 ]; then
-        print_info "没有需要清理的临时文件"
-    else
-        print_success "共清理了 $cleaned_count 项临时文件"
-    fi
+    print_success "项目临时文件已清理"
 }
 
-# 显示详细的服务状态
-show_detailed_status() {
-    echo ""
-    print_info "🔍 检查服务状态..."
+# 显示服务状态
+show_status() {
+    echo
+    print_info "检查项目服务状态..."
     
     local any_running=false
-    local status_info=()
     
-    # 检查主要端口
-    local ports=("$FRONTEND_PORT:前端服务" "$BACKEND_PORT:后端API" "5173:Vite开发服务器")
-    
-    for port_info in "${ports[@]}"; do
-        local port=${port_info%:*}
-        local service=${port_info#*:}
-        
-        if check_port $port; then
-            print_warning "端口 $port ($service) 仍在使用中"
+    # 检查项目端口
+    for port in 3000 8000 5173; do
+        if check_port "$port"; then
+            local pid=$(get_port_pid "$port")
+            if is_project_process "$pid"; then
+                print_warning "项目端口 $port 仍在使用中 (PID: $pid)"
             any_running=true
-            
-            # 获取进程信息
-            local pids=$(get_port_process $port)
-            if [ -n "$pids" ]; then
-                print_info "  占用进程: $pids"
+            else
+                print_info "端口 $port 被其他服务占用，跳过"
             fi
-        else
-            print_success "端口 $port ($service) 已释放"
         fi
     done
     
-    # 检查Docker服务
-    if command -v docker-compose &> /dev/null; then
-        cd "$PROJECT_ROOT"
-        local running_containers=$(docker-compose ps -q 2>/dev/null | wc -l)
-        if [ $running_containers -gt 0 ]; then
-            print_warning "Docker容器仍在运行 ($running_containers 个)"
+    # 检查项目Python和Node进程
+    if ps aux | grep "python.*main.py" | grep -v grep | grep "$PROJECT_ROOT" >/dev/null; then
+        print_warning "仍有项目Python main.py进程在运行"
             any_running=true
-        else
-            print_success "Docker服务已停止"
-        fi
     fi
     
-    # 检查相关进程
-    local process_patterns=("npm.*dev" "serve.*dist" "python.*main.py" "vite.*dev")
-    local running_processes=0
+    if ps aux | grep -E "(npm|yarn|node.*serve|vite)" | grep -v grep | grep "$PROJECT_ROOT" >/dev/null; then
+        print_warning "仍有项目Node.js开发服务器在运行"
+        any_running=true
+    fi
     
-    for pattern in "${process_patterns[@]}"; do
-        if pgrep -f "$pattern" >/dev/null 2>&1; then
-            ((running_processes++))
-        fi
+    if [[ "$any_running" == "false" ]]; then
+        print_success "所有项目服务已停止"
+    fi
+}
+
+# 强制停止模式（限制在项目范围内）
+force_stop() {
+    print_warning "强制停止项目服务"
+    
+    # 只强制杀死项目相关进程
+    ps aux | grep "python.*main.py" | grep "$PROJECT_ROOT" | grep -v grep | awk '{print $2}' | xargs -r kill -9 2>/dev/null
+    ps aux | grep -E "(npm|yarn|node.*serve|vite)" | grep "$PROJECT_ROOT" | grep -v grep | awk '{print $2}' | xargs -r kill -9 2>/dev/null
+    
+    # 强制释放项目端口
+    for port in 3000 8000 5173; do
+        kill_port_process "$port"
     done
     
-    if [ $running_processes -gt 0 ]; then
-        print_warning "仍有 $running_processes 个相关进程在运行"
-        any_running=true
-    else
-        print_success "所有相关进程已停止"
-    fi
+    cleanup_temp_files
     
-    echo ""
-    
-    if [ "$any_running" = false ]; then
-        echo -e "${GREEN}✅ 所有AVD Web服务已完全停止${NC}"
-        echo ""
-        echo -e "${CYAN}📱 启动服务:${NC}"
-        echo -e "  ${GREEN}开发模式:${NC} ./scripts/start.sh start"
-        echo -e "  ${GREEN}生产模式:${NC} ./scripts/start.sh start prod"
-        echo -e "  ${GREEN}Docker模式:${NC} ./scripts/start.sh start docker"
-        echo ""
-        echo -e "${CYAN}📊 管理命令:${NC}"
-        echo -e "  ${GREEN}检查状态:${NC} ./scripts/start.sh status"
-        echo -e "  ${GREEN}查看日志:${NC} ./scripts/start.sh logs"
-        echo -e "  ${GREEN}网络诊断:${NC} ./scripts/start.sh diagnose"
-    else
-        echo -e "${YELLOW}⚠️  部分服务仍在运行${NC}"
-        echo ""
-        print_tip "如需强制停止: $0 --force"
-        print_tip "检查详细状态: ./scripts/start.sh status"
-    fi
+    print_success "强制停止完成"
 }
 
 # 主停止函数
 stop_all_services() {
-    print_info "🛑 开始停止所有AVD Web服务..."
-    echo ""
+    print_info "开始停止AVD Web项目服务..."
     
     # 1. 停止PID记录的服务
     stop_pid_services
-    echo ""
     
-    # 2. 停止Docker服务
-    stop_docker
-    echo ""
+    # 2. 停止项目Python main.py进程
+    stop_python_main
     
-    # 3. 强制停止端口进程
-    print_info "🔌 释放网络端口..."
-    kill_port_process $FRONTEND_PORT "前端服务"
-    kill_port_process $BACKEND_PORT "后端API"
-    kill_port_process 5173 "Vite开发服务器"
-    echo ""
+    # 3. 停止项目Node.js进程
+    stop_node_processes
     
-    # 4. 停止相关进程
-    stop_related_processes
-    echo ""
+    # 4. 安全停止项目端口进程
+    kill_port_process 8000  # 后端
+    kill_port_process 3000  # 前端React
+    kill_port_process 5173  # 前端Vite
     
-    # 5. 清理临时文件
+    # 5. 清理项目临时文件
     cleanup_temp_files
-    echo ""
     
     # 6. 显示最终状态
-    show_detailed_status
+    show_status
     
-    echo ""
-    echo -e "${GREEN}╔══════════════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║                🎉 停止完成!                     ║${NC}"
-    echo -e "${GREEN}╚══════════════════════════════════════════════════╝${NC}"
-    echo ""
-}
-
-# 强制停止模式
-force_stop() {
-    echo -e "${RED}⚠️  强制停止模式${NC}"
-    print_warning "这将强制终止所有相关进程，可能导致数据丢失"
-    echo ""
-    
-    # 询问确认
-    read -p "确认强制停止所有服务? [y/N]: " -r
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        print_info "取消强制停止操作"
-        return 0
-    fi
-    
-    echo ""
-    print_info "💀 执行强制停止..."
-    
-    # 强制杀死所有相关进程
-    local force_patterns=(
-        "npm.*dev"
-        "serve.*dist"  
-        "python.*main.py"
-        "python.*uvicorn"
-        "vite.*dev"
-        "node.*vite"
-        "fastapi"
-        "celery"
-    )
-    
-    for pattern in "${force_patterns[@]}"; do
-        if pkill -9 -f "$pattern" 2>/dev/null; then
-            print_success "强制停止: $pattern"
-        fi
-    done
-    
-    # 强制停止Docker
-    cd "$PROJECT_ROOT"
-    if [ -f "docker-compose.yml" ]; then
-        print_info "强制停止Docker容器..."
-        docker-compose kill 2>/dev/null || true
-        docker-compose down --remove-orphans --volumes 2>/dev/null || true
-    fi
-    
-    # 强制释放端口
-    local force_ports=($FRONTEND_PORT $BACKEND_PORT 5173)
-    for port in "${force_ports[@]}"; do
-        if command -v fuser &> /dev/null; then
-            fuser -k ${port}/tcp 2>/dev/null || true
-        fi
-        
-        # 使用lsof强制关闭
-        if command -v lsof &> /dev/null; then
-            lsof -ti:$port | xargs -r kill -9 2>/dev/null || true
-        fi
-    done
-    
-    # 清理所有临时文件
-    cleanup_temp_files
-    
-    # 清理可能的僵尸进程
-    print_info "清理僵尸进程..."
-    ps aux | grep -E "(npm|node|python|vite)" | grep -v grep | awk '{print $2}' | xargs -r kill -9 2>/dev/null || true
-    
-    echo ""
-    print_success "💀 强制停止完成"
-    
-    # 显示状态
-    show_detailed_status
-}
-
-# 仅停止Docker
-docker_only_stop() {
-    print_info "🐳 停止Docker服务 (仅Docker模式)"
-    echo ""
-    stop_docker
-    echo ""
-    
-    # 检查Docker状态
-    cd "$PROJECT_ROOT"
-    if command -v docker-compose &> /dev/null && [ -f "docker-compose.yml" ]; then
-        local running_containers=$(docker-compose ps -q 2>/dev/null | wc -l)
-        if [ $running_containers -eq 0 ]; then
-            print_success "Docker服务已完全停止"
-        else
-            print_warning "部分Docker容器仍在运行"
-            print_tip "查看状态: docker-compose ps"
-        fi
-    fi
-}
-
-# 快速停止（仅停止主要服务）
-quick_stop() {
-    print_info "⚡ 快速停止主要服务..."
-    echo ""
-    
-    # 只停止主要端口和PID服务
-    stop_pid_services
-    echo ""
-    
-    kill_port_process $FRONTEND_PORT "前端服务"
-    kill_port_process $BACKEND_PORT "后端API"
-    
-    # 清理PID文件
-    rm -f "$PIDS_FILE".*
-    
-    echo ""
-    print_success "⚡ 快速停止完成"  
-    print_tip "如需完全清理: $0 --force"
-}
-
-# 仅清理临时文件
-cleanup_only() {
-    print_info "🧹 仅执行清理操作..."
-    echo ""
-    
-    cleanup_temp_files
-    
-    echo ""
-    print_success "🧹 清理完成"
+    echo
+    print_success "================ 停止完成 ================"
+    print_info "AVD Web项目服务已停止"
+    print_info "如需重新启动，请运行: ./scripts/start.sh"
+    echo "======================================="
 }
 
 # 显示帮助信息
 show_help() {
-    echo -e "${CYAN}AVD Web版本停止脚本 v2.1.0${NC}"
-    echo ""
-    echo -e "${YELLOW}用法:${NC}"
-    echo "  $0 [command] [options]"
-    echo ""
-    echo -e "${YELLOW}命令:${NC}"
-    echo -e "  ${GREEN}stop${NC}             正常停止所有服务 (默认)"
-    echo -e "  ${GREEN}force${NC}            强制停止所有服务"
-    echo -e "  ${GREEN}docker${NC}           仅停止Docker服务"
-    echo -e "  ${GREEN}quick${NC}            快速停止主要服务"
-    echo -e "  ${GREEN}cleanup${NC}          仅清理临时文件"
-    echo -e "  ${GREEN}status${NC}           检查服务状态"
-    echo -e "  ${GREEN}help${NC}             显示帮助信息"
-    echo ""
-    echo -e "${YELLOW}选项:${NC}"
-    echo -e "  ${GREEN}--force, -f${NC}      强制停止所有相关进程"
-    echo -e "  ${GREEN}--docker, -d${NC}     仅停止Docker服务"  
-    echo -e "  ${GREEN}--quick, -q${NC}      快速停止主要服务"
-    echo -e "  ${GREEN}--cleanup, -c${NC}    仅清理临时文件"
-    echo -e "  ${GREEN}--help, -h${NC}       显示帮助信息"
-    echo ""
-    echo -e "${YELLOW}使用示例:${NC}"
-    echo -e "  ${CYAN}$0${NC}                    # 正常停止所有服务"
-    echo -e "  ${CYAN}$0 stop${NC}               # 正常停止所有服务"
-    echo -e "  ${CYAN}$0 force${NC}              # 强制停止所有服务"  
-    echo -e "  ${CYAN}$0 --force${NC}            # 强制停止所有服务"
-    echo -e "  ${CYAN}$0 docker${NC}             # 仅停止Docker服务"
-    echo -e "  ${CYAN}$0 quick${NC}              # 快速停止主要服务"
-    echo -e "  ${CYAN}$0 cleanup${NC}            # 仅清理临时文件"
-    echo -e "  ${CYAN}$0 status${NC}             # 检查服务状态"
-    echo ""
-    echo -e "${YELLOW}停止后操作:${NC}"
-    echo -e "  • 启动服务: ./scripts/start.sh"
-    echo -e "  • 检查状态: ./scripts/start.sh status"  
-    echo -e "  • 查看日志: ./scripts/start.sh logs"
-    echo ""
-    echo -e "${PURPLE}安全提示: 强制停止可能导致数据丢失，请谨慎使用${NC}"
+    echo "AVD Web版本停止脚本 (Linux)"
+    echo
+    echo "用法:"
+    echo "  $0 [选项]"
+    echo
+    echo "选项:"
+    echo "  --force, -f    强制停止项目相关进程"
+    echo "  --port PORT    仅停止指定端口上的项目进程"
+    echo "  --help, -h     显示帮助信息"
+    echo
+    echo "示例:"
+    echo "  $0              # 正常停止项目服务"
+    echo "  $0 --force      # 强制停止项目服务"
+    echo "  $0 --port 8000  # 仅停止8000端口上的项目进程"
+    echo
+    echo "注意: 此脚本只会停止AVD项目相关的进程，不会影响其他系统服务"
 }
 
-# 检查服务状态（简化版）
-check_status() {
-    print_info "🔍 检查当前服务状态..."
-    show_detailed_status
+# 仅停止指定端口的项目进程
+stop_port_only() {
+    local port=$1
+    print_info "仅停止端口 $port 上的项目进程"
+    kill_port_process "$port"
 }
 
 # 主函数
 main() {
     show_banner
     
-    local command=${1:-stop}
-    
-    case $command in
-        stop|"")
-            stop_all_services
-            ;;
-        force|--force|-f)
+    case "$1" in
+        --force|-f)
             force_stop
             ;;
-        docker|--docker|-d)
-            docker_only_stop
+        --port)
+            if [[ -n "$2" ]]; then
+                stop_port_only "$2"
+            else
+                print_error "请指定端口号"
+                echo
+                show_help
+                exit 1
+            fi
             ;;
-        quick|--quick|-q)
-            quick_stop
-            ;;
-        cleanup|--cleanup|-c)
-            cleanup_only
-            ;;
-        status)
-            check_status
-            ;;
-        help|--help|-h)
+        --help|-h|help)
             show_help
             ;;
+        "")
+            stop_all_services
+            ;;
         *)
-            print_error "未知命令: $command"
-            echo ""
+            print_error "未知选项: $1"
+            echo
             show_help
             exit 1
             ;;
     esac
 }
-
-# 信号处理 - 确保优雅关闭
-cleanup_on_interrupt() {
-    echo ""
-    print_warning "收到中断信号，执行强制停止..."
-    force_stop
-    exit 0
-}
-
-# 注册信号处理
-trap cleanup_on_interrupt INT TERM
 
 # 运行主函数
 main "$@" 

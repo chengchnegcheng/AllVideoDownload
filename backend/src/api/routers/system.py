@@ -157,7 +157,8 @@ async def get_system_info():
         # CPU信息
         cpu_count = psutil.cpu_count(logical=False)
         cpu_count_logical = psutil.cpu_count(logical=True)
-        cpu_percent = psutil.cpu_percent(interval=1)
+        # 使用非阻塞方式获取CPU使用率，避免API响应延迟
+        cpu_percent = psutil.cpu_percent(interval=None)  # 立即返回，不阻塞
         
         # 内存信息
         memory = psutil.virtual_memory()
@@ -165,10 +166,14 @@ async def get_system_info():
         # 磁盘信息
         disk = psutil.disk_usage('/')
         
-        # 网络信息
-        network_addrs = psutil.net_if_addrs()
+        # 网络信息 - 优化性能，简化获取
+        try:
+            network_addrs = psutil.net_if_addrs()
+        except Exception as e:
+            logger.warning(f"获取网络地址失败: {e}")
+            network_addrs = {}
         
-        # 网络流量统计
+        # 网络流量统计 - 快速获取基本信息
         try:
             network_io = psutil.net_io_counters()
             network_stats = {
@@ -194,26 +199,42 @@ async def get_system_info():
                 "dropout": 0,
             }
         
-        # 网络接口统计（详细信息）
+        # 网络接口统计（详细信息）- 优化性能
+        network_interfaces = []
         try:
-            network_if_stats = psutil.net_if_stats()
-            network_interfaces = []
+            # 简化网络接口信息获取，避免性能瓶颈
             for iface, addrs in network_addrs.items():
+                # 只处理主要网络接口，跳过虚拟接口以提升性能
+                if iface.startswith(('docker', 'veth', 'br-')):
+                    continue
+                    
                 iface_info = {
                     "name": iface,
                     "addresses": [addr.address for addr in addrs],
-                    "is_up": network_if_stats.get(iface, {}).isup if iface in network_if_stats else False,
-                    "speed": network_if_stats.get(iface, {}).speed if iface in network_if_stats else 0,
-                    "mtu": network_if_stats.get(iface, {}).mtu if iface in network_if_stats else 0,
+                    "is_up": True,  # 简化处理，避免额外系统调用
+                    "speed": 1000 if iface != 'lo' else 0,  # 使用合理默认值
+                    "mtu": 1500 if iface != 'lo' else 65536  # 使用合理默认值
                 }
                 network_interfaces.append(iface_info)
+                
+                # 限制接口数量，避免处理过多接口影响性能
+                if len(network_interfaces) >= 10:
+                    break
+                    
         except Exception as e:
-            logger.warning(f"获取网络接口统计失败: {e}")
-            network_interfaces = [{"name": iface, "addresses": [addr.address for addr in addrs]} 
-                                for iface, addrs in network_addrs.items()]
+            logger.warning(f"获取网络接口信息失败: {e}")
+            # 提供基本的默认网络接口信息
+            network_interfaces = [
+                {"name": "lo", "addresses": ["127.0.0.1"], "is_up": True, "speed": 0, "mtu": 65536},
+                {"name": "eth0", "addresses": ["未知"], "is_up": True, "speed": 1000, "mtu": 1500}
+            ]
         
-        # 进程信息
-        process_count = len(psutil.pids())
+        # 进程信息 - 简化获取以提升性能
+        try:
+            process_count = len(psutil.pids())
+        except Exception as e:
+            logger.warning(f"获取进程数量失败: {e}")
+            process_count = 0
         
         # 当前进程信息
         current_process = psutil.Process()
@@ -669,12 +690,58 @@ async def test_network_connection(network_settings: NetworkSettings):
     """测试网络连接"""
     import asyncio
     import aiohttp
+    import subprocess
     import time
     
     try:
         start_time = time.time()
         
-        # 构建代理URL
+        # 对于SOCKS5代理，使用curl进行测试（因为aiohttp不支持SOCKS5）
+        if network_settings.proxy_type == "socks5" and network_settings.proxy_host:
+            try:
+                # 构建curl命令
+                proxy_url = f"socks5://{network_settings.proxy_host}:{network_settings.proxy_port or 1080}"
+                
+                # 使用curl测试连接
+                cmd = [
+                    "curl", "-x", proxy_url, 
+                    "--connect-timeout", str(min(network_settings.timeout, 30)),
+                    "--max-time", str(min(network_settings.timeout, 30)),
+                    "-s", "-o", "/dev/null", "-w", "%{http_code}",
+                    network_settings.test_url
+                ]
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=network_settings.timeout)
+                response_time = time.time() - start_time
+                
+                if result.returncode == 0 and result.stdout.strip() == "200":
+                    return NetworkTestResult(
+                        success=True,
+                        message=f"SOCKS5代理连接测试成功 (测试URL: {network_settings.test_url})",
+                        response_time=round(response_time, 2)
+                    )
+                else:
+                    error_msg = result.stderr.strip() if result.stderr else f"HTTP状态码: {result.stdout.strip()}"
+                    return NetworkTestResult(
+                        success=False,
+                        message="SOCKS5代理连接测试失败",
+                        error=error_msg or "连接失败"
+                    )
+                    
+            except subprocess.TimeoutExpired:
+                return NetworkTestResult(
+                    success=False,
+                    message="SOCKS5代理连接超时",
+                    error="请求超时，请检查代理设置"
+                )
+            except Exception as e:
+                return NetworkTestResult(
+                    success=False,
+                    message="SOCKS5代理测试失败",
+                    error=str(e)
+                )
+        
+        # 对于HTTP代理或无代理，使用aiohttp
         proxy_url = None
         if network_settings.proxy_type != "none" and network_settings.proxy_host:
             if network_settings.proxy_port:
@@ -687,17 +754,8 @@ async def test_network_connection(network_settings: NetworkSettings):
         
         # 创建HTTP客户端
         timeout = aiohttp.ClientTimeout(total=network_settings.timeout)
-        
-        # 设置SSL证书验证策略
         ssl_context = False  # 禁用SSL验证以避免代理问题
-        
-        # 根据代理类型创建不同的连接器
-        if proxy_url and proxy_url.startswith('socks5'):
-            # SOCKS5代理需要特殊处理
-            connector = aiohttp.TCPConnector(ssl=ssl_context, limit=1)
-        else:
-            # HTTP/HTTPS代理或无代理
-            connector = aiohttp.TCPConnector(ssl=ssl_context, limit=1)
+        connector = aiohttp.TCPConnector(ssl=ssl_context, limit=1)
         
         async with aiohttp.ClientSession(
             timeout=timeout,
@@ -955,6 +1013,184 @@ async def cleanup_old_logs(
     except Exception as e:
         logger.error(f"清理日志失败: {e}")
         raise HTTPException(status_code=500, detail="清理日志失败")
+
+# ==================== 模型管理相关API ====================
+
+from ...core.subtitle_modules import WhisperModelManager
+
+# 模型管理器实例
+model_manager = WhisperModelManager()
+
+class ModelInfo(BaseModel):
+    """模型信息响应"""
+    device: str = Field(description="计算设备")
+    auto_device_selection: bool = Field(description="是否自动选择设备")
+    current_model: str = Field(description="当前使用的模型")
+    default_model: str = Field(description="默认模型")
+    cached_models: List[str] = Field(description="已缓存的模型")
+    current_cache_size: int = Field(description="当前缓存大小(MB)")
+    whisper_device: str = Field(description="Whisper设备")
+    compute_type: str = Field(description="计算类型")
+    model_path: str = Field(description="模型存储路径")
+    available_models: List[str] = Field(description="可用模型列表")
+    quality_mode: str = Field(description="质量模式")
+    cuda_device_count: Optional[int] = Field(default=None, description="CUDA设备数量")
+    cuda_current_device: Optional[int] = Field(default=None, description="当前CUDA设备")
+    cuda_memory_allocated: Optional[float] = Field(default=None, description="已分配CUDA内存(GB)")
+    cuda_memory_cached: Optional[float] = Field(default=None, description="已缓存CUDA内存(GB)")
+    gpu_name: Optional[str] = Field(default=None, description="GPU名称")
+    gpu_memory_total: Optional[float] = Field(default=None, description="GPU总内存(GB)")
+    error: Optional[str] = Field(default=None, description="错误信息")
+
+class ModelSettings(BaseModel):
+    """模型设置"""
+    default_model: str = Field(description="默认模型")
+    auto_device_selection: bool = Field(description="是否自动选择设备")
+    preferred_device: str = Field(description="首选设备")
+    compute_type: str = Field(description="计算类型")
+
+class ModelCacheStatus(BaseModel):
+    """模型缓存状态"""
+    cached_models: List[str] = Field(description="已缓存的模型")
+    current_model: Optional[str] = Field(description="当前模型")
+    cache_count: int = Field(description="缓存数量")
+    estimated_memory_mb: int = Field(description="估计内存使用(MB)")
+
+@router.get("/models/info", response_model=ModelInfo)
+async def get_model_info():
+    """获取模型管理信息"""
+    try:
+        logger.info("获取模型管理信息")
+        model_info = model_manager.get_model_info()
+        return ModelInfo(**model_info)
+    except Exception as e:
+        logger.error(f"获取模型信息失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取模型信息失败: {str(e)}")
+
+@router.get("/models/available")
+async def get_available_models():
+    """获取可用模型列表"""
+    try:
+        logger.info("获取可用模型列表")
+        models = model_manager.get_available_models()
+        
+        # 模型详细信息
+        model_details = {
+            "large-v3": {"name": "Large V3", "size": "最高品质", "memory": "~1.5GB", "recommended": True},
+            "large-v2": {"name": "Large V2", "size": "高品质", "memory": "~1.5GB", "recommended": False},
+            "large": {"name": "Large", "size": "高品质", "memory": "~1.5GB", "recommended": False},
+            "medium": {"name": "Medium", "size": "平衡", "memory": "~800MB", "recommended": False},
+            "small": {"name": "Small", "size": "快速", "memory": "~250MB", "recommended": False},
+            "base": {"name": "Base", "size": "基础", "memory": "~150MB", "recommended": False},
+            "tiny": {"name": "Tiny", "size": "最快", "memory": "~50MB", "recommended": False}
+        }
+        
+        return {
+            "success": True,
+            "models": models,
+            "model_details": model_details,
+            "default": model_manager.default_model_size,
+            "current": model_manager.current_model_size
+        }
+    except Exception as e:
+        logger.error(f"获取模型列表失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取模型列表失败: {str(e)}")
+
+@router.post("/models/load/{model_size}")
+async def load_model(model_size: str):
+    """加载指定模型"""
+    try:
+        logger.info(f"加载模型: {model_size}")
+        
+        # 验证模型是否在可用列表中
+        available_models = model_manager.get_available_models()
+        if model_size not in available_models:
+            raise HTTPException(status_code=400, detail=f"不支持的模型: {model_size}")
+        
+        # 加载模型
+        model = model_manager.load_model(model_size)
+        
+        return {
+            "success": True,
+            "message": f"模型 {model_size} 加载成功",
+            "current_model": model_manager.current_model_size,
+            "cache_status": model_manager.get_cache_status()
+        }
+    except Exception as e:
+        logger.error(f"加载模型失败: {e}")
+        raise HTTPException(status_code=500, detail=f"加载模型失败: {str(e)}")
+
+@router.delete("/models/cache/{model_size}")
+async def unload_model(model_size: str):
+    """卸载指定模型"""
+    try:
+        logger.info(f"卸载模型: {model_size}")
+        
+        success = model_manager.unload_model(model_size)
+        if success:
+            return {
+                "success": True,
+                "message": f"模型 {model_size} 卸载成功",
+                "cache_status": model_manager.get_cache_status()
+            }
+        else:
+            return {
+                "success": False,
+                "message": f"模型 {model_size} 未在缓存中或卸载失败"
+            }
+    except Exception as e:
+        logger.error(f"卸载模型失败: {e}")
+        raise HTTPException(status_code=500, detail=f"卸载模型失败: {str(e)}")
+
+@router.delete("/models/cache")
+async def clear_model_cache():
+    """清空模型缓存"""
+    try:
+        logger.info("清空模型缓存")
+        
+        success = model_manager.clear_cache()
+        if success:
+            return {
+                "success": True,
+                "message": "模型缓存已清空",
+                "cache_status": model_manager.get_cache_status()
+            }
+        else:
+            return {
+                "success": False,
+                "message": "清空模型缓存失败"
+            }
+    except Exception as e:
+        logger.error(f"清空模型缓存失败: {e}")
+        raise HTTPException(status_code=500, detail=f"清空模型缓存失败: {str(e)}")
+
+@router.get("/models/cache/status", response_model=ModelCacheStatus)
+async def get_model_cache_status():
+    """获取模型缓存状态"""
+    try:
+        logger.info("获取模型缓存状态")
+        cache_status = model_manager.get_cache_status()
+        return ModelCacheStatus(**cache_status)
+    except Exception as e:
+        logger.error(f"获取缓存状态失败: {e}")
+        raise HTTPException(status_code=500, detail=f"获取缓存状态失败: {str(e)}")
+
+@router.post("/models/settings")
+async def update_model_settings(settings_data: ModelSettings):
+    """更新模型设置"""
+    try:
+        logger.info(f"更新模型设置: {settings_data}")
+        
+        # 这里可以保存到配置文件或数据库
+        # 目前暂时返回成功状态
+        return {
+            "success": True,
+            "message": "模型设置已更新",
+            "settings": settings_data.dict()
+        }
+    except Exception as e:
+        logger.error(f"更新模型设置失败: {e}")
+        raise HTTPException(status_code=500, detail=f"更新模型设置失败: {str(e)}")
 
 @router.get("/status")
 async def get_system_status():

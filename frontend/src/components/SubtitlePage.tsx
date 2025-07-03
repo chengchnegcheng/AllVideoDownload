@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Card,
   Form,
@@ -296,7 +296,7 @@ const SubtitlePage: React.FC<SubtitlePageProps> = () => {
       }
     };
 
-    // 添加定期状态检查
+    // 添加定期状态检查 - 降低频率减少对其他页面的影响
     const statusCheckInterval = setInterval(() => {
       if (processingStatus.isProcessing && processingStatus.startTime) {
         const elapsedTime = Date.now() - processingStatus.startTime;
@@ -304,10 +304,10 @@ const SubtitlePage: React.FC<SubtitlePageProps> = () => {
         // 根据任务类型和进度判断是否可能已完成但状态未更新
         const getProgressTimeout = () => {
           switch (processingStatus.operation) {
-            case 'generate': return 8 * 60 * 1000; // 生成字幕：8分钟
-            case 'translate': return 5 * 60 * 1000; // 翻译字幕：5分钟
-            case 'burn': return 10 * 60 * 1000; // 烧录字幕：10分钟
-            default: return 5 * 60 * 1000; // 默认：5分钟
+            case 'generate': return 10 * 60 * 1000; // 生成字幕：10分钟
+            case 'translate': return 7 * 60 * 1000; // 翻译字幕：7分钟
+            case 'burn': return 15 * 60 * 1000; // 烧录字幕：15分钟
+            default: return 8 * 60 * 1000; // 默认：8分钟
           }
         };
         
@@ -327,7 +327,7 @@ const SubtitlePage: React.FC<SubtitlePageProps> = () => {
           });
         }
       }
-    }, 10000); // 每10秒检查一次
+    }, 30000); // 每30秒检查一次，减少频率
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     
@@ -350,212 +350,162 @@ const SubtitlePage: React.FC<SubtitlePageProps> = () => {
     };
   }, []);
 
-  // 定期检查任务状态
+  // 定期检查任务状态 - 仅在必要时进行
   useEffect(() => {
-    if (processingStatus.isProcessing) {
-      const statusCheckInterval = setInterval(checkTaskCompletion, 10000); // 每10秒检查一次
+    if (processingStatus.isProcessing && processingStatus.progress < 95) {
+      // 只有在任务进行中且进度未达到95%时才进行检查
+      const statusCheckInterval = setInterval(checkTaskCompletion, 15000); // 每15秒检查一次，减少频率
       return () => clearInterval(statusCheckInterval);
     }
-  }, [processingStatus.isProcessing]);
+  }, [processingStatus.isProcessing, processingStatus.progress]);
 
-  // 通用流式处理函数（使用SSE进行真正的实时进度更新）
-  const handleStreamProcess = async (operation: string, data: any, videoTitle: string = '视频') => {
-    const taskId = TaskManager.generateTaskId();
-    
-    updateProcessingStatus({
-      isProcessing: true,
-      progress: 0,
-      message: '正在连接服务器...',
-      operation,
-      startTime: Date.now(),
-      taskId,
-      videoTitle
-    });
-
-    // 先发送POST请求启动任务
-    let connectionMonitor: NodeJS.Timeout | null = null;
-    
+  // 统一处理异步任务
+  const handleAsyncProcess = async (operation: string, data: any, videoTitle: string = '视频') => {
     try {
-      const initUrl = buildApiUrl(API_ENDPOINTS.SUBTITLES.STREAM);
-      const initResponse = await fetch(initUrl, {
+      // 1. 发送异步处理请求
+      const processUrl = buildApiUrl(API_ENDPOINTS.SUBTITLES.PROCESS);
+      const processResponse = await fetch(processUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           operation,
-          task_id: taskId,
           ...data
         }),
       });
 
-      if (!initResponse.ok) {
-        const errorData = await initResponse.json();
-        throw new Error(errorData.detail || '启动任务失败');
+      if (!processResponse.ok) {
+        const errorData = await processResponse.json();
+        throw new Error(errorData.detail || `${operation}请求失败`);
       }
 
-      // 读取SSE流
-      const reader = initResponse.body?.getReader();
-      const decoder = new TextDecoder();
-      
-      if (!reader) {
-        throw new Error('无法创建流读取器');
-      }
+      const processData = await processResponse.json();
+      const backendTaskId = processData.task_id;
+      const frontendTaskId = Date.now().toString();
 
-      let downloadData: any = null;
-      let buffer = '';
-      let lastProgressTime = Date.now();
-      let connectionAlive = true;
+      // 2. 设置初始状态
+      updateProcessingStatus({
+        isProcessing: true,
+        progress: 0,
+        message: '任务已提交，开始处理...',
+        operation,
+        startTime: Date.now(),
+        taskId: frontendTaskId,
+        videoTitle
+      });
 
-      // 连接监控定时器
-      connectionMonitor = setInterval(() => {
-        const now = Date.now();
-        const timeSinceLastProgress = now - lastProgressTime;
-        
-        // 如果超过2分钟没有收到任何数据，认为连接可能断开
-        if (timeSinceLastProgress > 2 * 60 * 1000 && connectionAlive) {
-          console.warn('SSE连接可能断开，超过2分钟未收到数据');
-          connectionAlive = false;
+      // 轮询状态检查函数
+      let isCompleted = false; // 添加标志防止重复通知
+      const pollStatus = async () => {
+        try {
+          const statusUrl = buildApiUrl(`${API_ENDPOINTS.SUBTITLES.STATUS}/${backendTaskId}`);
+          const statusResponse = await fetch(statusUrl);
           
+          if (!statusResponse.ok) {
+            throw new Error('获取任务状态失败');
+          }
+          
+          const statusData = await statusResponse.json();
+          
+          // 更新前端状态
           updateProcessingStatus({
-            isProcessing: false,
-            progress: 0,
-            message: '连接断开，请重试',
-            operation: ''
+            isProcessing: statusData.status === 'running' || statusData.status === 'pending',
+            progress: statusData.progress,
+            message: statusData.message || '处理中...',
+            operation,
+            startTime: Date.now(),
+            taskId: frontendTaskId,
+            videoTitle
           });
-          
-                     if (connectionMonitor) {
-             clearInterval(connectionMonitor);
-             connectionMonitor = null;
-           }
-           reader.cancel();
-        }
-      }, 30000); // 每30秒检查一次
 
-      while (connectionAlive) {
-        const { done, value } = await reader.read();
-        
-        if (done) {
-          if (connectionMonitor) {
-            clearInterval(connectionMonitor);
-          }
-          break;
-        }
-        
-        // 更新最后接收数据的时间
-        lastProgressTime = Date.now();
-        
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        
-        // 保留最后一个不完整的行
-        buffer = lines.pop() || '';
-        
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const dataStr = line.slice(6).trim();
+          if (statusData.status === 'completed' && !isCompleted) {
+            isCompleted = true; // 设置标志防止重复处理
             
-            if (dataStr === '[DONE]') {
-              // 处理完成，开始下载
-              if (downloadData && downloadData.download_ready) {
-                // 触发文件下载
-                const downloadUrl = buildApiUrl(`${API_ENDPOINTS.SUBTITLES.DOWNLOAD}/${downloadData.record_id}`);
-                const link = document.createElement('a');
-                link.href = downloadUrl;
-                link.download = downloadData.filename || 'subtitle.srt';
-                document.body.appendChild(link);
-                link.click();
-                document.body.removeChild(link);
-                
-                notification.success({
-                  message: '处理成功',
-                  description: `${operation === 'translate' ? '翻译' : operation === 'generate' ? '生成' : '处理'}完成，文件已开始下载`,
-                  duration: 4
-                });
-              }
+            // 任务完成，触发下载
+            if (statusData.result && statusData.result.subtitle_file) {
+              const subtitleFilename = statusData.result.subtitle_file.split('/').pop() || statusData.result.subtitle_file;
+              const downloadUrl = buildApiUrl(`${API_ENDPOINTS.SUBTITLES.DOWNLOAD}/${subtitleFilename}`);
+             
+              const link = document.createElement('a');
+              link.href = downloadUrl;
+              link.download = subtitleFilename;
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
               
-              // 清理状态
-              setTimeout(() => {
-                setProcessingStatus({
-                  isProcessing: false,
-                  progress: 0,
-                  message: '',
-                  operation: ''
-                });
-                TaskManager.clearTask();
-              }, 2000);
-              
-              return; // 退出函数
+              notification.success({
+                message: '处理成功',
+                description: `${operation === 'translate' ? '翻译' : operation === 'generate_from_url' || operation === 'generate_from_file' ? '生成' : '处理'}完成，文件已开始下载`,
+                duration: 4
+              });
             }
             
-            if (dataStr && dataStr !== '') {
-              try {
-                const progressData = JSON.parse(dataStr);
-                
-                if (progressData.error) {
-                  throw new Error(progressData.error);
-                }
-                
-                if (progressData.status === 'processing') {
-                  // 更新进度
-                  const newStatus = {
-                    isProcessing: true,
-                    progress: Math.max(progressData.progress || 0, 0),
-                    message: progressData.message || '处理中...',
-                    operation,
-                    startTime: Date.now(),
-                    taskId: progressData.task_id || progressData.record_id || taskId,
-                    videoTitle
-                  };
-                  
-                  setProcessingStatus(newStatus);
-                  TaskManager.saveTask(newStatus);
-                  
-                  console.log(`进度更新: ${newStatus.progress}% - ${newStatus.message}`);
-                } else if (progressData.status === 'completed') {
-                  // 处理完成，准备下载
-                  downloadData = progressData;
-                  
-                  setProcessingStatus(prev => ({
-                    ...prev,
-                    progress: 100,
-                    message: progressData.message || '处理完成！'
-                  }));
-                } else if (progressData.status === 'cancelled') {
-                  // 任务已被取消
-                  updateProcessingStatus({
-                    isProcessing: false,
-                    progress: 0,
-                    message: '任务已取消',
-                    operation: ''
-                  });
-                  
-                  notification.info({
-                    message: '任务已取消',
-                    description: '任务处理已停止',
-                    duration: 3
-                  });
-                  
-                  return; // 退出处理
-                } else if (progressData.status === 'error') {
-                  throw new Error(progressData.error || '处理失败');
-                }
-                
-              } catch (parseError) {
-                console.warn('解析SSE数据失败:', parseError, 'raw data:', dataStr);
-              }
-            }
+            // 清理状态
+            setTimeout(() => {
+              updateProcessingStatus({
+                isProcessing: false,
+                progress: 0,
+                message: '',
+                operation: ''
+              });
+            }, 2000);
+            
+            return true; // 停止轮询
+          } else if (statusData.status === 'failed' && !isCompleted) {
+            isCompleted = true; // 防止重复处理错误
+            throw new Error(statusData.error || '任务处理失败');
+          } else if (statusData.status === 'cancelled' && !isCompleted) {
+            isCompleted = true; // 防止重复处理取消
+            updateProcessingStatus({
+              isProcessing: false,
+              progress: 0,
+              message: '任务已取消',
+              operation: ''
+            });
+            return true; // 停止轮询
           }
+          
+          return false; // 继续轮询
+        } catch (error) {
+          throw error;
         }
-      }
+      };
+
+      // 3. 开始轮询状态 - 使用指数退避策略
+      let pollIntervalTime = 2000; // 初始2秒
+      let pollAttempts = 0;
+      const maxPollInterval = 10000; // 最大10秒
+      
+      const scheduleNextPoll = () => {
+        setTimeout(async () => {
+          try {
+            pollAttempts++;
+            const shouldStop = await pollStatus();
+            if (shouldStop) {
+              return; // 停止轮询
+            }
+            
+            // 指数退避：每次增加间隔时间，减少服务器压力
+            if (pollAttempts > 5) {
+              pollIntervalTime = Math.min(pollIntervalTime * 1.2, maxPollInterval);
+            }
+            
+            scheduleNextPoll(); // 递归调度下次轮询
+          } catch (error) {
+            console.error('轮询状态检查失败:', error);
+            // 出错时也继续轮询，但延长间隔
+            pollIntervalTime = Math.min(pollIntervalTime * 2, maxPollInterval);
+            scheduleNextPoll();
+          }
+        }, pollIntervalTime);
+      };
+
+      // 启动优化后的轮询调度
+      scheduleNextPoll();
 
     } catch (error: any) {
-      console.error('流式处理错误:', error);
-      
-      // 清理连接监控定时器
-      if (connectionMonitor) {
-        clearInterval(connectionMonitor);
-      }
+      console.error('异步任务处理错误:', error);
       
       updateProcessingStatus({
         isProcessing: false,
@@ -572,7 +522,7 @@ const SubtitlePage: React.FC<SubtitlePageProps> = () => {
     }
   };
 
-  // 从URL生成字幕（流式处理）
+  // 从URL生成字幕（异步任务模式）
   const handleGenerateFromUrl = async (values: any) => {
     // 提取视频标题用于显示
     let videoTitle = '在线视频';
@@ -583,16 +533,16 @@ const SubtitlePage: React.FC<SubtitlePageProps> = () => {
       }
     }
     
-    await handleStreamProcess('generate', {
+    await handleAsyncProcess('generate_from_url', {
       video_url: values.video_url,
       language: values.language || 'auto',
-      translate_to: values.translate_to
+      target_language: values.translate_to
     }, videoTitle);
     
     generateUrlForm.resetFields();
   };
 
-  // 从文件生成字幕
+  // 从文件生成字幕（异步任务模式）
   const handleGenerateFromFile = async (values: any, file: any) => {
     if (!file) {
       notification.warning({
@@ -625,13 +575,11 @@ const SubtitlePage: React.FC<SubtitlePageProps> = () => {
       // 获取视频文件名作为任务标题
       const videoTitle = file.name.replace(/\.[^/.]+$/, '');
 
-      // 然后流式生成字幕
-      await handleStreamProcess('generate', {
+      // 然后异步生成字幕
+      await handleAsyncProcess('generate_from_file', {
         video_file_path: uploadResult.file_path,
         language: values.language || 'auto',
-        translate_to: values.translate_to,
-        original_title: videoTitle,
-        prefer_local_filename: true
+        target_language: values.translate_to
       }, videoTitle);
 
       generateFileForm.resetFields();
@@ -645,7 +593,7 @@ const SubtitlePage: React.FC<SubtitlePageProps> = () => {
     }
   };
 
-  // 翻译字幕（流式）
+  // 翻译字幕（异步任务模式）
   const handleTranslate = async (values: any, file: any) => {
     if (!file) {
       notification.warning({
@@ -678,14 +626,12 @@ const SubtitlePage: React.FC<SubtitlePageProps> = () => {
       // 获取字幕文件名作为任务标题
       const subtitleTitle = file.name.replace(/\.[^/.]+$/, '') + ' (翻译)';
 
-      // 然后流式翻译
-      await handleStreamProcess('translate', {
+      // 然后异步翻译
+      await handleAsyncProcess('translate', {
         subtitle_file_path: uploadResult.file_path,
         source_language: values.source_language || 'auto',
         target_language: values.target_language,
-        translation_method: 'sentencepiece', // 使用SentencePiece翻译
-        original_title: file.name.replace(/\.[^/.]+$/, ''), // 移除文件扩展名
-        prefer_local_filename: true
+        translation_method: values.translation_method || 'optimized'
       }, subtitleTitle);
 
       translateForm.resetFields();
@@ -699,201 +645,14 @@ const SubtitlePage: React.FC<SubtitlePageProps> = () => {
     }
   };
 
-  // 字幕烧录
+  // 字幕烧录（暂时禁用）
   const handleBurnSubtitles = async (values: any) => {
-    if (!videoFile) {
-      notification.warning({
-        message: '请选择视频文件',
-        description: '请选择要烧录字幕的视频文件',
-      });
-      return;
-    }
-
-    if (!subtitleFile) {
-      notification.warning({
-        message: '请选择字幕文件',
-        description: '请选择要烧录的字幕文件',
-      });
-      return;
-    }
-
-    setLoading(true);
-    
-    try {
-      // 上传视频文件
-      const videoFormData = new FormData();
-      videoFormData.append('file', videoFile);
-      
-      const videoUploadResponse = await fetch(buildApiUrl(API_ENDPOINTS.SUBTITLES.UPLOAD), {
-        method: 'POST',
-        body: videoFormData,
-      });
-
-      if (!videoUploadResponse.ok) {
-        const videoError = await videoUploadResponse.json();
-        throw new Error(videoError.detail || '视频文件上传失败');
-      }
-
-      const videoUploadResult = await videoUploadResponse.json();
-
-      // 上传字幕文件
-      const subtitleFormData = new FormData();
-      subtitleFormData.append('file', subtitleFile);
-      
-      const subtitleUploadResponse = await fetch(buildApiUrl(API_ENDPOINTS.SUBTITLES.UPLOAD), {
-        method: 'POST',
-        body: subtitleFormData,
-      });
-
-      if (!subtitleUploadResponse.ok) {
-        const subtitleError = await subtitleUploadResponse.json();
-        throw new Error(subtitleError.detail || '字幕文件上传失败');
-      }
-
-      const subtitleUploadResult = await subtitleUploadResponse.json();
-      
-      setLoading(false);
-      
-      // 获取任务标题
-      const burnTitle = `${videoFile.name.replace(/\.[^/.]+$/, '')} (烧录字幕)`;
-      const taskId = TaskManager.generateTaskId();
-      
-      updateProcessingStatus({
-        isProcessing: true,
-        progress: 10,
-        message: '正在准备烧录...',
-        operation: 'burn',
-        startTime: Date.now(),
-        taskId,
-        videoTitle: burnTitle
-      });
-
-      // 执行烧录（直接下载，不通过流式处理）
-      const progressTimer = setInterval(() => {
-        setProcessingStatus(prev => {
-          if (!prev.isProcessing) {
-            clearInterval(progressTimer);
-            return prev;
-          }
-          
-          const newProgress = Math.min(prev.progress + 5, 85);
-          const newStatus = {
-            ...prev,
-            progress: newProgress,
-            message: newProgress < 30 ? '正在分析视频...' : 
-                     newProgress < 60 ? '正在烧录字幕...' : '即将完成...'
-          };
-          
-          TaskManager.saveTask(newStatus);
-          return newStatus;
-        });
-      }, 2000);
-
-      const response = await fetch(buildApiUrl(API_ENDPOINTS.SUBTITLES.BURN), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          video_file_path: videoUploadResult.file_path,
-          subtitle_file_path: subtitleUploadResult.file_path,
-          video_title: videoFile.name.replace(/\.[^/.]+$/, ''),
-          original_title: videoFile.name.replace(/\.[^/.]+$/, ''),
-          prefer_local_filename: true,
-          ...values
-        }),
-      });
-
-      clearInterval(progressTimer);
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || '字幕烧录失败');
-      }
-
-      updateProcessingStatus({
-        ...processingStatus,
-        progress: 95,
-        message: '正在准备下载...'
-      });
-
-      // 处理文件下载
-      const contentDisposition = response.headers.get('Content-Disposition');
-      let filename = 'video_with_subtitles.mp4';
-      
-      if (contentDisposition) {
-        const filenameStarMatch = contentDisposition.match(/filename\*=UTF-8''([^;]+)/);
-        if (filenameStarMatch) {
-          try {
-            filename = decodeURIComponent(filenameStarMatch[1]);
-          } catch (e) {
-            console.warn('解码UTF-8文件名失败:', e);
-          }
-        } else {
-          const filenameMatch = contentDisposition.match(/filename="([^"]+)"/);
-          if (filenameMatch) {
-            filename = filenameMatch[1];
-          }
-        }
-      }
-
-      // 创建下载
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.style.display = 'none';
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      
-      setTimeout(() => {
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-      }, 100);
-
-      updateProcessingStatus({
-        isProcessing: false,
-        progress: 100,
-        message: '烧录完成！文件已开始下载',
-        operation: 'burn'
-      });
-
-      notification.success({
-        message: '烧录成功',
-        description: '字幕已烧录到视频中，文件已开始下载',
-        duration: 4
-      });
-
-      burnForm.resetFields();
-      setVideoFile(null);
-      setSubtitleFile(null);
-
-      // 清理状态
-      setTimeout(() => {
-        updateProcessingStatus({
-          isProcessing: false,
-          progress: 0,
-          message: '',
-          operation: ''
-        });
-      }, 4000);
-
-    } catch (error: any) {
-      setLoading(false);
-      updateProcessingStatus({
-        isProcessing: false,
-        progress: 0,
-        message: `烧录失败: ${error.message}`,
-        operation: 'burn'
-      });
-      
-      notification.error({
-        message: '烧录失败',
-        description: error.message || '字幕烧录失败',
-        duration: 5
-      });
-    }
+    // 烧录功能暂时不可用
+    notification.warning({
+      message: '功能暂时不可用',
+      description: '字幕烧录功能正在开发中，敬请期待后续更新',
+      duration: 4
+    });
   };
 
   return (
@@ -939,7 +698,7 @@ const SubtitlePage: React.FC<SubtitlePageProps> = () => {
                       
                       if (taskId) {
                         try {
-                          // 调用后端取消API
+                          // 调用后端取消API  
                           const response = await fetch(buildApiUrl(API_ENDPOINTS.SUBTITLES.CANCEL_TASK), {
                             method: 'POST',
                             headers: {

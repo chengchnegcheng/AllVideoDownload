@@ -393,7 +393,8 @@ class SubtitleTranslator:
 
     async def translate_subtitles(self, subtitle_path: str, target_language: str = "zh", 
                                 source_language: str = "auto", 
-                                progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
+                                progress_callback: Optional[Callable] = None,
+                                original_title: Optional[str] = None) -> Dict[str, Any]:
         """
         翻译字幕文件（优化版）
         
@@ -402,6 +403,7 @@ class SubtitleTranslator:
             target_language: 目标语言
             source_language: 源语言
             progress_callback: 进度回调函数
+            original_title: 原始文件标题（可选）
             
         Returns:
             Dict[str, Any]: 翻译结果
@@ -425,7 +427,7 @@ class SubtitleTranslator:
             await safe_progress_callback(5, "正在解析字幕文件...")
             
             # 解析字幕文件
-            from .subtitle_file_handler import SubtitleFileHandler
+            from .subtitle_file_handler_enhanced import EnhancedSubtitleFileHandler as SubtitleFileHandler
             file_handler = SubtitleFileHandler()
             subtitles = file_handler.parse_srt_file(subtitle_path)
             
@@ -484,10 +486,15 @@ class SubtitleTranslator:
             
             await safe_progress_callback(95, "正在保存翻译结果...")
             
-            # 生成翻译文件名
-            subtitle_name = Path(subtitle_path).stem
-            if subtitle_name.endswith("_subtitles"):
-                subtitle_name = subtitle_name[:-10]
+            # 生成翻译文件名 - 优先使用原始标题
+            if original_title:
+                subtitle_name = original_title
+                logger.info(f"使用原始标题生成翻译文件名: {subtitle_name}")
+            else:
+                subtitle_name = Path(subtitle_path).stem
+                if subtitle_name.endswith("_subtitles"):
+                    subtitle_name = subtitle_name[:-10]
+                logger.info(f"从文件路径提取标题生成翻译文件名: {subtitle_name}")
             
             safe_name = file_handler.sanitize_filename(subtitle_name, max_length=160, default_name="translated_subtitle")
             translated_filename = f"{safe_name}_{target_language}_subtitles.srt"

@@ -32,6 +32,7 @@ import {
 import { useSystemSettings, SystemSettings } from '../hooks/useSystemSettings';
 import { useErrorHandler } from '../hooks/useErrorHandler';
 import NetworkSettings from './NetworkSettings';
+import ModelManagement from './ModelManagement';
 
 const { Title, Text, Paragraph } = Typography;
 const { Option } = Select;
@@ -335,6 +336,16 @@ const SystemPage: React.FC = () => {
               </span>
             ),
             children: <NetworkSettings onSave={refreshData} />
+          },
+          {
+            key: 'models',
+            label: (
+              <span>
+                <DatabaseOutlined />
+                <span className="tab-label">模型管理</span>
+              </span>
+            ),
+            children: <ModelManagement />
           },
           {
             key: 'server',

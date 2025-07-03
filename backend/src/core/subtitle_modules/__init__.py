@@ -14,7 +14,7 @@
 from .audio_processor import AudioProcessor
 from .whisper_model_manager import WhisperModelManager
 from .subtitle_translator import SubtitleTranslator
-from .subtitle_file_handler import SubtitleFileHandler
+from .subtitle_file_handler_enhanced import EnhancedSubtitleFileHandler
 from .subtitle_generator import SubtitleGenerator
 from .url_processor import URLProcessor
 from .subtitle_effects import SubtitleEffects
@@ -23,7 +23,7 @@ __all__ = [
     'AudioProcessor',
     'WhisperModelManager', 
     'SubtitleTranslator',
-    'SubtitleFileHandler',
+    'EnhancedSubtitleFileHandler',
     'SubtitleGenerator',
     'URLProcessor',
     'SubtitleEffects'

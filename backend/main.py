@@ -80,6 +80,7 @@ app.include_router(subtitles.router, prefix="/api/v1/subtitles", tags=["字幕"]
 app.include_router(auth.router, prefix="/api/v1/auth", tags=["认证"])
 app.include_router(system.router, prefix="/api/v1/system", tags=["系统"])
 
+# 新的统一字幕处理系统已整合持久化功能
 
 # 静态文件服务 - 统一文件访问路径
 app.mount("/uploads", StaticFiles(directory=settings.FILES_PATH), name="uploads")

@@ -131,7 +131,7 @@ async def download_processed_file(record_id: str):
         # 生成更友好的文件名
         filename = target_file.name
         
-        # 尝试从映射文件获取原始文件名
+        # 尝试从映射文件获取原始文件名 - 增强版本
         mapping_file = temp_files_dir / f"{record_id}_mapping.json"
         if mapping_file.exists():
             try:
@@ -139,16 +139,29 @@ async def download_processed_file(record_id: str):
                     mapping_info = json.load(f)
                     original_name = mapping_info.get('original_filename', filename)
                     if original_name:
-                        # 构造更友好的下载文件名
+                        # 清理原始文件名，移除扩展名获取基本名称
                         base_name = Path(original_name).stem
-                        if '_zh_subtitles' in filename:
+                        
+                        # 根据字幕文件类型构造友好的下载文件名
+                        if '_zh_subtitles' in filename or '_zh_en_subtitles' in filename:
                             filename = f"{base_name}_中文字幕.srt"
                         elif '_subtitles' in filename:
                             filename = f"{base_name}_字幕.srt"
                         else:
-                            filename = f"{base_name}.srt"
+                            filename = f"{base_name}_字幕.srt"
+                        
+                        logger.info(f"使用原始文件名: {original_name} -> {filename}")
+                    else:
+                        # 尝试使用original_title字段
+                        original_title = mapping_info.get('original_title', '')
+                        if original_title:
+                            base_name = original_title.strip()
+                            filename = f"{base_name}_字幕.srt"
+                            logger.info(f"使用原始标题: {original_title} -> {filename}")
             except Exception as e:
                 logger.warning(f"读取映射文件失败: {e}")
+        else:
+            logger.warning(f"映射文件不存在: {mapping_file}")
         
         file_size = os.path.getsize(temp_file_path)
         

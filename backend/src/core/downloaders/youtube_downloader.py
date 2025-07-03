@@ -19,6 +19,12 @@ import requests
 from .base_downloader import BaseDownloader, DownloadOptions
 from ..config import settings
 
+import asyncio
+
+from ...utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 class YouTubeDownloader(BaseDownloader):
     """YouTube专用下载器 - 2025终极强化版"""
     
@@ -240,30 +246,141 @@ class YouTubeDownloader(BaseDownloader):
         }
     
     def get_platform_specific_options(self, options: DownloadOptions, url: str) -> Dict[str, Any]:
-        """获取YouTube特定的yt-dlp选项 - 简化版（基于成功的原始yt-dlp配置）"""
+        """获取YouTube特定的yt-dlp选项 - 彻底修复HTTP 400问题"""
         youtube_opts = {
             # 基础配置
             "quiet": True,
             "no_warnings": True,
             
-            # 简化extractor参数 - 基于成功的原始yt-dlp配置
+            # 彻底修复HTTP 400的核心配置
             "extractor_args": {
                 "youtube": {
-                    # 强制使用ANDROID客户端 - 这是关键！
-                    "player_client": ["android"]
+                    # 关键：强制使用ANDROID客户端（最稳定）
+                    "player_client": ["android", "web"],  # 多客户端后备
+                    
+                    # 跳过所有可能导致问题的功能
+                    "skip": ["dash", "hls", "live_chat"],
+                    "player_skip": ["webpage", "configs"],
+                    
+                    # 绕过限制
+                    "include_live_dash": False,
+                    "bypass_rate_limit": True,
+                    "check_formats": False,  # 关键：不检查格式有效性
+                    
+                    # 强制Android API
+                    "use_android_client": True,
                 }
-            }
+            },
+            
+            # 强制格式配置 - 避免复杂格式选择
+            "format": "bestaudio[ext=m4a]/bestaudio[ext=mp3]/bestaudio/worst" if options.audio_only else "worst[height<=720]/worst",
+            
+            # 网络和连接配置
+            "socket_timeout": 30,
+            "retries": 10,
+            "fragment_retries": 10,
+            "sleep_interval_requests": 1,
+            "sleep_interval": 2,
+            
+            # 强制简单模式
+            "no_check_certificate": True,  # 跳过证书检查
+            "prefer_insecure": True,       # 优先不安全连接
+            "force_ipv4": True,            # 强制IPv4
+            
+            # User-Agent伪装
+            "http_headers": {
+                "User-Agent": "com.google.android.youtube/19.50.37 (Linux; U; Android 14; SM-G998B) gzip",
+                "Accept": "*/*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate",
+            },
         }
         
-        # 添加代理支持
+        # 如果是音频下载，添加更强制的配置
+        if options.audio_only:
+            youtube_opts.update({
+                # 简化音频配置
+                "format": "bestaudio/worst",  # 最简单的格式选择
+                "extractaudio": True,
+                "audioformat": "mp3",
+                "audioquality": "9",  # 最低质量，确保兼容性
+                
+                # 跳过所有非必要功能
+                "embed_chapters": False,
+                "embed_metadata": False,
+                "writethumbnail": False,
+                "writeinfojson": True,  # 保留，用于调试
+                "writedescription": False,
+                "writeautomaticsub": False,
+                "writesubtitles": False,
+            })
+        
+        # 代理配置
         if settings.HTTP_PROXY:
             proxy_url = settings.HTTP_PROXY
-            # 确保SOCKS5代理正确配置
             if proxy_url.startswith('socks5://'):
                 proxy_url = proxy_url.replace('socks5://', 'socks5h://')
             youtube_opts["proxy"] = proxy_url
         
         return youtube_opts
+
+    
+    def _get_audio_format_selector(self, options: DownloadOptions) -> str:
+        """
+        获取最简单的音频格式选择器 - 彻底避免HTTP 400错误
+        
+        Args:
+            options: 下载选项
+            
+        Returns:
+            str: 格式选择器字符串
+        """
+        if options.audio_only:
+            # 最简单的格式选择，避免复杂查询导致HTTP 400
+            return "bestaudio/worst"
+        else:
+            # 最简单的视频格式
+            return "worst[height<=720]/worst"
+
+    
+    def _get_fallback_options(self) -> Dict[str, Any]:
+        """
+        获取降级选项 - 当标准配置失败时使用
+        
+        Returns:
+            Dict[str, Any]: 降级配置选项
+        """
+        return {
+            # 最基础的配置
+            "quiet": True,
+            "no_warnings": True,
+            "no_check_certificate": True,
+            "prefer_insecure": True,
+            "force_ipv4": True,
+            
+            # 最简单的extractor配置
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android"],  # 只使用Android客户端
+                    "skip": ["dash", "hls", "live_chat", "comments"],
+                    "player_skip": ["webpage"],
+                    "check_formats": False,
+                }
+            },
+            
+            # 最简单的格式
+            "format": "worst",
+            
+            # 最低的网络要求
+            "socket_timeout": 60,
+            "retries": 3,
+            "fragment_retries": 3,
+            
+            # 简化的HTTP头
+            "http_headers": {
+                "User-Agent": "yt-dlp/2025.6.30",
+            },
+        }
     
     def _get_innertube_key(self, client_name: str) -> List[str]:
         """获取Innertube API密钥"""
@@ -458,32 +575,88 @@ class YouTubeDownloader(BaseDownloader):
         raise Exception("所有客户端都无法获取视频信息")
     
     async def download(self, url: str, options: DownloadOptions, progress_callback=None, task_id: str = None) -> dict:
-        """下载视频 - 带客户端轮换的重试机制"""
-        max_attempts = len(self._clients) * 2
+        """下载视频 - 带多层降级策略解决HTTP 400"""
+        max_attempts = 5  # 增加尝试次数
         
         for attempt in range(max_attempts):
             try:
                 if attempt > 0:
                     self._rotate_client()
-                    time.sleep(random.uniform(5, 10))
+                    await asyncio.sleep(2 ** attempt)  # 指数退避
                 
-                return await super().download(url, options, progress_callback, task_id)
+                # 第1-2次尝试：使用标准配置
+                if attempt < 2:
+                    logger.info(f"YouTube下载尝试 {attempt + 1}/{max_attempts}: 使用标准配置")
+                    return await super().download(url, options, progress_callback, task_id)
+                
+                # 第3-4次尝试：使用降级配置
+                elif attempt < 4:
+                    logger.info(f"YouTube下载尝试 {attempt + 1}/{max_attempts}: 使用降级配置")
+                    # 临时替换平台特定选项
+                    original_method = self.get_platform_specific_options
+                    self.get_platform_specific_options = lambda opts, url: self._get_fallback_options()
+                    try:
+                        result = await super().download(url, options, progress_callback, task_id)
+                        return result
+                    finally:
+                        self.get_platform_specific_options = original_method
+                
+                # 第5次尝试：最简配置
+                else:
+                    logger.info(f"YouTube下载尝试 {attempt + 1}/{max_attempts}: 使用最简配置")
+                    # 使用最基础的yt-dlp配置
+                    simple_opts = {
+                        "quiet": True,
+                        "format": "worst",
+                        "extractaudio": options.audio_only,
+                        "audioformat": "mp3" if options.audio_only else None,
+                        "outtmpl": os.path.join(options.output_path, options.output_filename or "%(title)s.%(ext)s"),
+                    }
+                    
+                    if settings.HTTP_PROXY:
+                        proxy_url = settings.HTTP_PROXY
+                        if proxy_url.startswith('socks5://'):
+                            proxy_url = proxy_url.replace('socks5://', 'socks5h://')
+                        simple_opts["proxy"] = proxy_url
+                    
+                    # 直接使用yt-dlp
+                    import yt_dlp
+                    with yt_dlp.YoutubeDL(simple_opts) as ydl:
+                        try:
+                            info = ydl.extract_info(url, download=True)
+                            if info:
+                                # 查找下载的文件
+                                filename = ydl.prepare_filename(info)
+                                if os.path.exists(filename):
+                                    return {
+                                        "success": True,
+                                        "file_path": filename,
+                                        "title": info.get("title", "Unknown"),
+                                        "message": "YouTube下载完成（简单模式）"
+                                    }
+                        except Exception as e:
+                            logger.warning(f"简单模式下载失败: {e}")
+                
                 
             except Exception as e:
                 error_msg = str(e).lower()
                 
+                # 检查是否是不可重试的错误
                 if any(keyword in error_msg for keyword in [
                     "sign in to confirm",
-                    "this video is unavailable", 
+                    "this video is unavailable",
                     "private video",
                     "deleted",
-                    "copyright"
+                    "copyright",
+                    "blocked"
                 ]):
+                    logger.error(f"不可重试的错误: {e}")
                     raise e
                 
                 if attempt == max_attempts - 1:
+                    logger.error(f"所有下载尝试都失败: {e}")
                     raise e
                 
-                print(f"客户端 {self._get_current_client()['name']} 下载失败，尝试下一个客户端...")
+                logger.warning(f"下载尝试 {attempt + 1} 失败，将重试: {e}")
         
-        raise Exception("所有客户端都无法下载视频") 
+        raise Exception("所有下载策略都无法下载视频") 

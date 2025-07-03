@@ -31,7 +31,7 @@ export const FILE_ACCESS_PATHS = {
 
 // API端点配置
 export const API_ENDPOINTS = {
-  // 字幕相关 - 新版模块化API (version 2.0)
+  // 字幕相关 - 新版模块化API (version 3.0)
   SUBTITLES: {
     // 基本信息
     LANGUAGES: '/api/v1/subtitles/info/languages',
@@ -41,28 +41,29 @@ export const API_ENDPOINTS = {
     // 文件上传
     UPLOAD: '/api/v1/subtitles/upload',
     
-    // 文件管理 - 修正为实际可用的端点  
-    RECORDS: '/api/v1/subtitles/records',
-    DOWNLOAD: '/api/v1/subtitles/files/download',
+    // 核心处理 - 修正为实际存在的端点
+    PROCESS: '/api/v1/subtitles/process',
+    STATUS: '/api/v1/subtitles/status',
+    DOWNLOAD: '/api/v1/subtitles/download',
+    CANCEL_TASK: '/api/v1/subtitles/cancel-task',
+    
+    // 配置查询
+    CONFIG: '/api/v1/subtitles/config',
     
     // 任务管理
-    CANCEL_TASK: '/api/v1/subtitles/tasks/cancel-task',
-    TASK_STATUS: '/api/v1/subtitles/tasks/task-status',
+    TASKS: '/api/v1/subtitles/tasks',
+    CLEANUP: '/api/v1/subtitles/cleanup',
     
-    // 核心处理
-    STREAM: '/api/v1/subtitles/processor/stream',
-    GENERATE_FROM_URL: '/api/v1/subtitles/processor/generate-from-url',
-    GENERATE_FROM_FILE: '/api/v1/subtitles/processor/generate-from-file',
-    BURN: '/api/v1/subtitles/processor/burn',
+    // 向后兼容端点
+    GENERATE_FROM_URL: '/api/v1/subtitles/generate-from-url',
+    GENERATE_FROM_FILE: '/api/v1/subtitles/generate-from-file',
+    TRANSLATE: '/api/v1/subtitles/translate-subtitle',
     
-    // 设置管理
-    AI_SETTINGS: '/api/v1/subtitles/settings/ai-settings',
-    AI_SETTINGS_TEST: '/api/v1/subtitles/settings/ai-settings/test',
-    TRANSLATION_SETTINGS: '/api/v1/subtitles/settings/translation-settings',
-    TEST_TRANSLATION: '/api/v1/subtitles/settings/test-translation',
-    
-    // 向后兼容的旧端点别名
-    TRANSLATE: '/api/v1/subtitles/settings/test-translation'
+    // 废弃的端点（保留注释以避免混淆）
+    // STREAM: '/api/v1/subtitles/processor/stream', // 已移除：改为异步任务模式
+    // RECORDS: '/api/v1/subtitles/records', // 已移除：使用TASKS替代
+    // TASK_STATUS: '/api/v1/subtitles/tasks/task-status', // 已移除：使用STATUS替代
+    // BURN: '/api/v1/subtitles/processor/burn', // 已移除
   },
   
   // 上传相关 - 注意：这些端点可能不存在，需要使用字幕上传端点

@@ -9,514 +9,648 @@ import os
 import asyncio
 from typing import Dict, List, Optional, Callable, Any
 import logging
+from pathlib import Path
 
 from .config import settings
 from ..utils.logger import get_logger
+
+# 添加任务管理器引用
+try:
+    from ..api.routers.subtitles.subtitle_processor import task_manager
+except ImportError:
+    # 如果没有task_manager，创建一个简单的替代
+    class SimpleTaskManager:
+        def is_cancelled(self, task_id):
+            return False
+    task_manager = SimpleTaskManager()
 
 # 导入拆分的模块
 from .subtitle_modules import (
     AudioProcessor,
     WhisperModelManager,
     SubtitleTranslator,
-    SubtitleFileHandler,
     SubtitleGenerator,
     URLProcessor,
     SubtitleEffects
 )
+
+# 使用增强版字幕文件处理器
+from .subtitle_modules.subtitle_file_handler_enhanced import EnhancedSubtitleFileHandler
 
 logger = get_logger(__name__)
 
 
 class SubtitleProcessor:
     """
-    字幕处理器主类
+    重写优化的字幕处理器
     
-    协调各个子模块完成字幕处理任务，包括：
-    - 音频提取和处理（使用faster-whisper最高品质）
-    - SentencePiece翻译（最高品质）
-    - 自动清理临时文件
-    - 浏览器下载回传
+    核心功能：
+    1. 从URL生成字幕
+    2. 从文件生成字幕  
+    3. 翻译字幕
+    4. 进度跟踪和错误处理
+    
+    特点：
+    - 统一的错误处理
+    - 自动资源清理
+    - 实时进度反馈
+    - 智能参数优化
     """
     
     def __init__(self):
-        """初始化字幕处理器和所有子模块"""
-        # 初始化各个子模块
+        """初始化字幕处理器"""
+        # 核心模块
         self.audio_processor = AudioProcessor()
         self.model_manager = WhisperModelManager()
-        from .subtitle_modules.subtitle_translator_optimized import SubtitleTranslatorOptimized
-        self.translator = SubtitleTranslatorOptimized()
-        self.file_handler = SubtitleFileHandler()
-        self.subtitle_generator = SubtitleGenerator()
+        self.file_handler = EnhancedSubtitleFileHandler()
         self.url_processor = URLProcessor()
-        self.effects_processor = SubtitleEffects()
         
-        # 临时文件跟踪列表
+        # 使用标准翻译器
+        from .subtitle_modules.subtitle_translator import SubtitleTranslator
+        self.translator = SubtitleTranslator()
+        logger.info("使用高性能标准翻译器")
+        
+        # 临时文件管理
         self.temp_files = []
         
-        logger.info("字幕处理器初始化完成（使用faster-whisper最高品质+优化版翻译器）")
+        logger.info("字幕处理器初始化完成")
     
     def _add_temp_file(self, file_path: str):
-        """添加临时文件到跟踪列表"""
+        """添加临时文件到清理列表"""
         if file_path and file_path not in self.temp_files:
             self.temp_files.append(file_path)
     
     async def _cleanup_temp_files(self):
-        """自动清理临时文件"""
+        """清理临时文件"""
         try:
-            cleanup_count = 0
-            for temp_file in self.temp_files:
+            cleaned_count = 0
+            for temp_file in self.temp_files[:]:
                 try:
                     if os.path.exists(temp_file):
                         os.remove(temp_file)
-                        logger.info(f"已清理临时文件: {temp_file}")
-                        cleanup_count += 1
+                        cleaned_count += 1
+                        logger.debug(f"清理临时文件: {temp_file}")
                 except Exception as e:
-                    logger.warning(f"清理临时文件失败 {temp_file}: {e}")
+                    logger.warning(f"清理文件失败 {temp_file}: {e}")
             
             self.temp_files.clear()
-            logger.info(f"自动清理完成，共清理 {cleanup_count} 个临时文件")
-            
+            if cleaned_count > 0:
+                logger.info(f"清理了 {cleaned_count} 个临时文件")
+                
         except Exception as e:
-            logger.error(f"自动清理临时文件失败: {e}")
-    
-    # =============================================================
-    # 公共API接口（保持兼容性）
-    # =============================================================
-    
-    def get_supported_languages(self) -> Dict[str, Any]:
-        """获取支持的语言列表"""
-        return self.translator.get_supported_languages()
-    
-    def get_translation_config(self) -> Dict[str, Any]:
-        """获取翻译配置信息"""
-        return self.translator.get_translation_config()
-    
-    def get_model_info(self) -> Dict[str, Any]:
-        """获取模型信息"""
-        return self.model_manager.get_model_info()
-    
-    def reload_config(self) -> Dict[str, Any]:
-        """重新加载配置"""
-        try:
-            # 清除各模块的缓存
-            self.model_manager.clear_cache()
-            
-            # 重新初始化翻译器（优化版）
-            from .subtitle_modules.subtitle_translator_optimized import SubtitleTranslatorOptimized
-            self.translator = SubtitleTranslatorOptimized()
-            
-            logger.info("配置重新加载完成")
-            return {
-                "success": True,
-                "message": "配置重新加载成功",
-                "cache_cleared": True
-            }
-            
-        except Exception as e:
-            logger.error(f"重新加载配置失败: {e}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    # =============================================================
-    # 字幕生成相关接口（新流程）
-    # =============================================================
-    
-    async def generate_subtitles(self,
-                               video_path: str,
-                               language: str = "auto",
-                               model_size: str = None,
-                               progress_callback: Optional[Callable] = None,
-                               video_title: str = None,
-                               auto_translate: bool = True,
-                               target_language: str = "zh") -> Dict[str, Any]:
+            logger.error(f"清理临时文件失败: {e}")
+
+    async def process_from_url(self, 
+                              video_url: str,
+                              source_language: str = 'auto',
+                              model_size: str = 'large-v3',
+                              target_language: Optional[str] = None,
+                              quality_mode: str = 'balance',
+                              task_id: Optional[str] = None,
+                              progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
         """
-        从视频文件生成字幕（新流程）
-        1. 音频提取（使用faster-whisper最高品质）
-        2. SentencePiece翻译（最高品质）
-        3. 自动清理临时文件
+        从URL生成字幕 - 重写优化版本
         
         Args:
-            video_path: 视频文件路径
-            language: 语言代码
-            model_size: 模型大小（默认使用最高品质）
+            video_url: 视频URL
+            source_language: 源语言 (auto/zh/en/ja等)
+            model_size: 模型大小 (large-v3/large/medium等)
+            target_language: 目标翻译语言 (可选)
+            quality_mode: 质量模式 (quality/balance/speed)
+            task_id: 任务ID (用于取消检查)
             progress_callback: 进度回调函数
-            video_title: 视频标题
-            auto_translate: 是否自动翻译
-            target_language: 翻译目标语言
-            
-        Returns:
-            Dict[str, Any]: 生成结果
-        """
-        try:
-            # 使用最高品质模型
-            if not model_size:
-                model_size = "large-v3"  # 强制使用最高品质模型
-            
-            # 辅助函数：智能调用progress_callback
-            async def safe_progress_callback(progress, message=""):
-                if progress_callback:
-                    import inspect
-                    if inspect.iscoroutinefunction(progress_callback):
-                        await progress_callback(progress, message)
-                    else:
-                        progress_callback(progress, message)
-            
-            await safe_progress_callback(5, "开始处理视频文件...")
-            
-            # 1. 生成原始字幕（使用faster-whisper最高品质）
-            subtitle_result = await self.subtitle_generator.generate_from_video(
-                video_path=video_path,
-                language=language,
-                model_size=model_size,
-                progress_callback=None,  # 避免异步回调警告
-                video_title=video_title
-            )
-            
-            if not subtitle_result.get("success"):
-                return subtitle_result
-            
-            original_subtitle_file = subtitle_result["subtitle_file"]
-            
-            # 2. SentencePiece翻译（如果需要）
-            if auto_translate and target_language != language:
-                await safe_progress_callback(70, "开始SentencePiece翻译...")
-                
-                translate_result = await self.translator.translate_subtitles(
-                    subtitle_path=original_subtitle_file,
-                    source_language=language,
-                    target_language=target_language,
-                    progress_callback=None  # 避免异步回调警告
-                )
-                
-                if translate_result.get("success"):
-                    # 删除原始字幕文件，保留翻译版本
-                    self._add_temp_file(original_subtitle_file)
-                    subtitle_result["subtitle_file"] = translate_result["translated_file"]
-                    subtitle_result["translated"] = True
-                    subtitle_result["translation_info"] = translate_result
-                
-            await safe_progress_callback(98, "准备下载文件...")
-            
-            # 3. 自动清理临时文件（保留最终结果文件）
-            await self._cleanup_temp_files()
-            
-            await safe_progress_callback(100, "处理完成，准备下载")
-            
-            # 添加下载相关信息
-            subtitle_result.update({
-                "ready_for_download": True,
-                "model_quality": "最高品质(large-v3)",
-                "translation_quality": "SentencePiece最高品质" if auto_translate else None,
-                "temp_files_cleaned": True
-            })
-            
-            return subtitle_result
-            
-        except Exception as e:
-            logger.error(f"生成字幕失败: {e}")
-            # 清理临时文件
-            await self._cleanup_temp_files()
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    async def generate_subtitles_from_url(self,
-                                        url: str,
-                                        language: str = "auto",
-                                        model_size: str = None,
-                                        translate_to: Optional[str] = "zh",
-                                        download_video: bool = False,
-                                        progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
-        """
-        从URL生成字幕（新流程）
-        1. 下载到服务器files文件夹临时存储
-        2. 音频提取（使用faster-whisper最高品质）
-        3. SentencePiece翻译（最高品质）
-        4. 自动清理临时文件
         
-        Args:
-            url: 视频URL
-            language: 语言代码
-            model_size: 模型大小（默认使用最高品质）
-            translate_to: 翻译目标语言
-            download_video: 是否保留视频文件
-            progress_callback: 进度回调函数
-            
         Returns:
-            Dict[str, Any]: 生成结果
+            处理结果字典
         """
         try:
-            # 使用最高品质模型
-            if not model_size:
-                model_size = "large-v3"  # 强制使用最高品质模型
+            logger.info(f"开始从URL生成字幕: {video_url}")
             
-            # 辅助函数：智能调用progress_callback
-            async def safe_progress_callback(progress, message=""):
-                if progress_callback:
-                    import inspect
-                    if inspect.iscoroutinefunction(progress_callback):
-                        await progress_callback(progress, message)
-                    else:
-                        progress_callback(progress, message)
+            if progress_callback:
+                await progress_callback(15, "验证URL...")
             
-            await safe_progress_callback(5, "开始从URL下载...")
+            # 1. 验证URL
+            if not self._validate_url(video_url):
+                return {'success': False, 'error': '无效的视频URL'}
             
-            # 1. 下载视频/音频到files文件夹并生成字幕
+            # 检查任务是否被取消
+            if task_id and self._is_task_cancelled(task_id):
+                return {'success': False, 'error': '任务已被取消'}
+            
+            if progress_callback:
+                await progress_callback(20, "开始下载和处理...")
+            
+            # 2. 使用URL处理器处理，传递进度回调
             result = await self.url_processor.generate_subtitles_from_url(
-                url=url,
-                language=language,
+                url=video_url,
+                language=source_language,
                 model_size=model_size,
-                translate_to=None,  # 暂时不翻译，后面用SentencePiece
-                download_video=download_video,
-                progress_callback=None  # 避免异步回调警告
+                download_video=False,
+                progress_callback=progress_callback  # 传递进度回调
             )
             
-            if not result.get("success"):
-                return result
+            if not result.get('success'):
+                return {
+                    'success': False,
+                    'error': f"URL处理失败: {result.get('error', '未知错误')}"
+                }
             
-            # 记录下载的文件用于清理
-            if result.get("video_file") and not download_video:
-                self._add_temp_file(result["video_file"])
+            # 检查任务是否被取消
+            if task_id and self._is_task_cancelled(task_id):
+                return {'success': False, 'error': '任务已被取消'}
             
-            # 2. SentencePiece翻译（如果需要）
-            if translate_to and translate_to != language:
-                await safe_progress_callback(75, "开始SentencePiece翻译...")
+            # 3. 翻译处理 (如果需要)
+            if target_language and target_language != source_language:
+                if progress_callback:
+                    await progress_callback(85, "正在翻译字幕...")
                 
-                translate_result = await self.translator.translate_subtitles(
-                    subtitle_path=result["subtitle_file"],
-                    source_language=language,
-                    target_language=translate_to,
-                    progress_callback=None  # 避免异步回调警告
-                )
-                
-                if translate_result.get("success"):
-                    # 删除原始字幕文件，保留翻译版本
-                    self._add_temp_file(result["subtitle_file"])
-                    result["subtitle_file"] = translate_result["translated_file"]
-                    result["translated"] = True
-                    result["translation_info"] = translate_result
+                subtitle_file = result.get('subtitle_file')
+                if subtitle_file:
+                    translate_result = await self._translate_subtitle_internal(
+                        subtitle_file, source_language, target_language, task_id
+                    )
+                    
+                    if translate_result.get('success'):
+                        result['subtitle_file'] = translate_result['translated_file']
+                        result['translated'] = True
+                        result['target_language'] = target_language
+                        self._add_temp_file(subtitle_file)  # 原文件标记为临时
             
-            await safe_progress_callback(98, "准备下载文件...")
+            if progress_callback:
+                await progress_callback(95, "清理临时文件...")
             
-            # 3. 自动清理临时文件
+            # 4. 清理临时文件
             await self._cleanup_temp_files()
             
-            await safe_progress_callback(100, "处理完成，准备下载")
+            if progress_callback:
+                await progress_callback(100, "处理完成")
             
-            # 添加下载相关信息
-            result.update({
-                "ready_for_download": True,
-                "model_quality": "最高品质(large-v3)",
-                "translation_quality": "SentencePiece最高品质" if translate_to else None,
-                "temp_files_cleaned": True
-            })
-            
+            logger.info(f"从URL生成字幕完成: {result.get('title', 'unknown')}")
             return result
             
         except Exception as e:
             logger.error(f"从URL生成字幕失败: {e}")
-            # 清理临时文件
             await self._cleanup_temp_files()
-            return {
-                "success": False,
-                "error": str(e)
-            }
-    
-    # =============================================================
-    # 字幕翻译相关接口（新流程）
-    # =============================================================
-    
-    async def translate_subtitles(self,
-                                subtitle_path: str,
-                                source_language: str = "auto",
-                                target_language: str = "zh",
-                                translation_method: str = None,
-                                progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
+            return {'success': False, 'error': str(e)}
+
+    async def process_from_file(self, 
+                            video_file_path: str,
+                            source_language: str = 'auto',
+                            model_size: str = 'large-v3',
+                            target_language: Optional[str] = None,
+                            quality_mode: str = 'balance',
+                            task_id: Optional[str] = None,
+                            video_title: Optional[str] = None,
+                            progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
         """
-        翻译字幕文件（新流程）
-        1. 字幕文件上传到服务器files文件夹临时存储
-        2. SentencePiece翻译（最高品质）
-        3. 自动清理临时文件
+        从文件生成字幕 - 重写优化版本
+        
+        Args:
+            video_file_path: 视频文件路径
+            source_language: 源语言 (auto/zh/en/ja等)
+            model_size: 模型大小 (large-v3/large/medium等)
+            target_language: 目标翻译语言 (可选)
+            quality_mode: 质量模式 (quality/balance/speed)
+            task_id: 任务ID (用于取消检查)
+            video_title: 视频标题 (可选)
+            progress_callback: 进度回调函数
+        
+        Returns:
+            处理结果字典
+        """
+        try:
+            logger.info(f"开始从文件生成字幕: {video_file_path}")
+            
+            if progress_callback:
+                await progress_callback(15, "验证文件...")
+            
+            # 1. 验证文件存在
+            if not os.path.exists(video_file_path):
+                return {'success': False, 'error': '视频文件不存在'}
+            
+            # 检查任务是否被取消
+            if task_id and self._is_task_cancelled(task_id):
+                return {'success': False, 'error': '任务已被取消'}
+            
+            if progress_callback:
+                await progress_callback(20, "提取音频...")
+            
+            # 2. 提取音频
+            audio_path = await self.audio_processor.extract_audio(
+                video_file_path
+            )
+            
+            if not audio_path:
+                return {'success': False, 'error': '音频提取失败'}
+            
+            self._add_temp_file(audio_path)
+            
+            # 检查任务是否被取消
+            if task_id and self._is_task_cancelled(task_id):
+                return {'success': False, 'error': '任务已被取消'}
+            
+            if progress_callback:
+                await progress_callback(30, "加载语音识别模型...")
+            
+            # 3. 生成字幕的进度回调包装器
+            async def subtitle_progress_wrapper(progress: float, message: str = ""):
+                # 将字幕生成的进度映射到30-80的范围
+                mapped_progress = 30 + (progress * 0.5)  # 50%的进度范围给字幕生成
+                if progress_callback:
+                    await progress_callback(mapped_progress, message)
+            
+            # 4. 生成字幕
+            result = await self._generate_subtitles_from_audio_internal(
+                audio_path=audio_path,
+                source_language=source_language,
+                model_size=model_size,
+                quality_mode=quality_mode,
+                task_id=task_id,
+                video_title=video_title,
+                progress_callback=subtitle_progress_wrapper
+            )
+            
+            if not result.get('success'):
+                return result
+            
+            # 检查任务是否被取消
+            if task_id and self._is_task_cancelled(task_id):
+                return {'success': False, 'error': '任务已被取消'}
+            
+            # 5. 翻译处理 (如果需要)
+            if target_language and target_language != source_language:
+                if progress_callback:
+                    await progress_callback(85, "正在翻译字幕...")
+                
+                subtitle_file = result.get('subtitle_file')
+                if subtitle_file:
+                    translate_result = await self._translate_subtitle_internal(
+                        subtitle_file, source_language, target_language, task_id
+                    )
+                    
+                    if translate_result.get('success'):
+                        result['subtitle_file'] = translate_result['translated_file']
+                        result['translated'] = True
+                        result['target_language'] = target_language
+                        self._add_temp_file(subtitle_file)  # 原文件标记为临时
+            
+            if progress_callback:
+                await progress_callback(95, "清理临时文件...")
+            
+            # 6. 清理临时文件
+            await self._cleanup_temp_files()
+            
+            if progress_callback:
+                await progress_callback(100, "处理完成")
+            
+            logger.info(f"从文件生成字幕完成: {result.get('title', 'unknown')}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"从文件生成字幕失败: {e}")
+            await self._cleanup_temp_files()
+            return {'success': False, 'error': str(e)}
+
+    async def translate_subtitle_file(self, 
+                                   subtitle_path: str,
+                                   source_language: str = 'auto',
+                                   target_language: str = 'zh',
+                                   translation_method: str = 'optimized',
+                                   quality_mode: str = 'balance',
+                                   task_id: Optional[str] = None,
+                                   original_title: Optional[str] = None,
+                                   progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
+        """
+        翻译字幕文件 - 重写优化版本
         
         Args:
             subtitle_path: 字幕文件路径
             source_language: 源语言
             target_language: 目标语言
-            translation_method: 翻译方法（兼容参数，强制使用SentencePiece）
+            translation_method: 翻译方法
+            quality_mode: 质量模式
+            task_id: 任务ID (用于取消检查)
+            original_title: 原始标题 (可选)
             progress_callback: 进度回调函数
-            
+        
         Returns:
-            Dict[str, Any]: 翻译结果
+            翻译结果字典
         """
         try:
-            # 辅助函数：智能调用progress_callback
-            async def safe_progress_callback(progress, message=""):
+            logger.info(f"开始翻译字幕: {subtitle_path}")
+            
+            if progress_callback:
+                await progress_callback(15, "验证字幕文件...")
+            
+            # 1. 验证文件存在
+            if not os.path.exists(subtitle_path):
+                return {'success': False, 'error': '字幕文件不存在'}
+            
+            # 检查任务是否被取消
+            if task_id and self._is_task_cancelled(task_id):
+                return {'success': False, 'error': '任务已被取消'}
+            
+            if progress_callback:
+                await progress_callback(20, "准备翻译...")
+            
+            # 2. 翻译进度回调包装器
+            async def translate_progress_wrapper(progress: float, message: str = ""):
+                # 将翻译进度映射到20-95的范围
+                mapped_progress = 20 + (progress * 0.75)  # 75%的进度范围给翻译
                 if progress_callback:
-                    import inspect
-                    if inspect.iscoroutinefunction(progress_callback):
-                        await progress_callback(progress, message)
-                    else:
-                        progress_callback(progress, message)
+                    await progress_callback(mapped_progress, message)
             
-            await safe_progress_callback(5, "开始SentencePiece翻译...")
-            
-            # 强制使用SentencePiece翻译（最高品质）
-            # 注意：暂时不传递progress_callback避免异步警告
-            result = await self.translator.translate_subtitles(
+            # 3. 执行翻译
+            result = await self._translate_subtitle_internal(
                 subtitle_path=subtitle_path,
                 source_language=source_language,
                 target_language=target_language,
-                progress_callback=None  # 避免异步回调警告
+                task_id=task_id,
+                progress_callback=translate_progress_wrapper
             )
             
-            if not result.get("success"):
+            if not result.get('success'):
                 return result
             
-            await safe_progress_callback(98, "准备下载文件...")
+            # 检查任务是否被取消
+            if task_id and self._is_task_cancelled(task_id):
+                return {'success': False, 'error': '任务已被取消'}
             
-            # 自动清理临时文件（保留翻译结果）
-            if subtitle_path != result.get("translated_file"):
-                self._add_temp_file(subtitle_path)
+            if progress_callback:
+                await progress_callback(95, "完成翻译...")
             
-            await self._cleanup_temp_files()
+            # 4. 处理结果
+            result['original_title'] = original_title
+            result['source_language'] = source_language
+            result['target_language'] = target_language
+            result['translation_method'] = translation_method
             
-            await safe_progress_callback(100, "翻译完成，准备下载")
+            if progress_callback:
+                await progress_callback(100, "翻译完成")
             
-            # 添加下载相关信息和字段映射
-            result.update({
-                "ready_for_download": True,
-                "translation_quality": "SentencePiece最高品质",
-                "temp_files_cleaned": True,
-                "subtitle_file": result.get("translated_file")  # 映射字段用于SSE处理
-            })
-            
+            logger.info(f"字幕翻译完成: {result.get('translated_file', 'unknown')}")
             return result
             
         except Exception as e:
             logger.error(f"翻译字幕失败: {e}")
-            # 清理临时文件
-            await self._cleanup_temp_files()
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {'success': False, 'error': str(e)}
     
-    # =============================================================
-    # 字幕特效和烧录相关接口
-    # =============================================================
-    
-    async def burn_subtitles_to_video(self,
-                                    video_path: str,
-                                    subtitle_path: str,
-                                    output_path: str = None,
-                                    subtitle_style: Dict[str, Any] = None,
-                                    progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
+    async def _generate_subtitles_from_audio_internal(self, 
+                                                   audio_path: str, 
+                                                   source_language: str = 'auto', 
+                                                   model_size: str = 'large-v3',
+                                                   quality_mode: str = 'balance',
+                                                   task_id: Optional[str] = None,
+                                                   video_title: Optional[str] = None,
+                                                   progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
         """
-        将字幕烧录到视频中
+        从音频文件生成字幕的内部方法
         
         Args:
-            video_path: 视频文件路径
-            subtitle_path: 字幕文件路径
-            output_path: 输出文件路径
-            subtitle_style: 字幕样式
+            audio_path: 音频文件路径
+            source_language: 源语言
+            model_size: 模型大小
+            quality_mode: 质量模式
+            task_id: 任务ID
+            video_title: 视频标题
             progress_callback: 进度回调函数
-            
+        
         Returns:
-            Dict[str, Any]: 烧录结果
+            生成结果
         """
-        return await self.effects_processor.burn_subtitles_to_video(
-            video_path=video_path,
-            subtitle_path=subtitle_path,
-            output_path=output_path,
-            subtitle_style=subtitle_style,
-            progress_callback=progress_callback
-        )
+        try:
+            if progress_callback:
+                await progress_callback(5, "加载语音识别模型...")
+            
+            # 检查任务是否被取消
+            if task_id and self._is_task_cancelled(task_id):
+                return {'success': False, 'error': '任务已被取消'}
+            
+            # 加载Whisper模型
+            model = self.model_manager.load_model(model_size)
+            if not model:
+                return {'success': False, 'error': f'无法加载模型: {model_size}'}
+            
+            if progress_callback:
+                await progress_callback(15, "开始语音识别...")
+            
+            # 转录配置
+            transcribe_options = {
+                'language': None if source_language == 'auto' else source_language,
+                'beam_size': self._get_beam_size(quality_mode),
+                'best_of': self._get_best_of(quality_mode),
+                'vad_filter': True,
+                'vad_parameters': dict(min_silence_duration_ms=500),
+                'word_timestamps': True
+            }
+            
+            # 检查任务是否被取消
+            if task_id and self._is_task_cancelled(task_id):
+                return {'success': False, 'error': '任务已被取消'}
+            
+            # 执行转录 - 使用线程池异步执行同步的transcribe方法
+            import asyncio
+            from concurrent.futures import ThreadPoolExecutor
+            
+            def transcribe_sync():
+                """同步执行转录"""
+                return model.transcribe(audio_path, **transcribe_options)
+            
+            # 在线程池中异步执行转录
+            loop = asyncio.get_event_loop()
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                # 提交转录任务
+                future = loop.run_in_executor(executor, transcribe_sync)
+                
+                # 在等待转录完成的同时更新进度
+                progress_step = 0
+                while not future.done():
+                    await asyncio.sleep(1)  # 等待1秒
+                    progress_step += 5
+                    current_progress = min(85, 15 + progress_step)  # 15-85范围内的进度
+                    
+                    if progress_callback:
+                        await progress_callback(current_progress, "正在进行语音识别...")
+                    
+                    # 检查任务是否被取消
+                    if task_id and self._is_task_cancelled(task_id):
+                        return {'success': False, 'error': '任务已被取消'}
+                
+                # 获取转录结果
+                segments, info = await future
+            
+            if progress_callback:
+                await progress_callback(90, "生成字幕文件...")
+            
+            # 检查任务是否被取消
+            if task_id and self._is_task_cancelled(task_id):
+                return {'success': False, 'error': '任务已被取消'}
+            
+            # 生成字幕文件
+            subtitle_file = await self.file_handler.save_subtitles_from_segments(
+                segments=list(segments),
+                video_title=video_title,
+                format_type="srt"
+            )
+            
+            if progress_callback:
+                await progress_callback(100, "字幕生成完成")
+            
+            return {
+                'success': True,
+                'subtitle_file': subtitle_file,
+                'language': info.language if hasattr(info, 'language') else source_language,
+                'duration': info.duration if hasattr(info, 'duration') else 0,
+                'title': video_title or 'Unknown'
+            }
+            
+        except Exception as e:
+            logger.error(f"从音频生成字幕失败: {e}")
+            return {'success': False, 'error': str(e)}
     
-    def get_default_subtitle_style(self) -> Dict[str, Any]:
-        """获取默认字幕样式"""
-        return self.effects_processor.get_default_subtitle_style()
+    async def _translate_subtitle_internal(self, 
+                                        subtitle_path: str, 
+                                        source_language: str, 
+                                        target_language: str, 
+                                        task_id: Optional[str] = None,
+                                        progress_callback: Optional[Callable] = None) -> Dict[str, Any]:
+        """
+        内部字幕翻译方法
+        
+        Args:
+            subtitle_path: 字幕文件路径
+            source_language: 源语言
+            target_language: 目标语言
+            task_id: 任务ID
+            progress_callback: 进度回调函数
+        
+        Returns:
+            翻译结果
+        """
+        try:
+            if progress_callback:
+                await progress_callback(5, "加载字幕文件...")
+            
+            # 检查任务是否被取消
+            if task_id and self._is_task_cancelled(task_id):
+                return {'success': False, 'error': '任务已被取消'}
+            
+            if progress_callback:
+                await progress_callback(10, "初始化翻译器...")
+            
+            # 使用优化翻译器
+            translator = ImprovedTranslator()
+            
+            if progress_callback:
+                await progress_callback(20, "开始翻译...")
+            
+            # 创建翻译进度回调
+            async def translation_progress(progress: float, message: str = ""):
+                # 将翻译进度映射到20-90的范围
+                mapped_progress = 20 + (progress * 0.7)
+                if progress_callback:
+                    await progress_callback(mapped_progress, message)
+            
+            # 执行翻译
+            result = await translator.translate_subtitles(
+                subtitle_path=subtitle_path,
+                target_language=target_language,
+                source_language=source_language,
+                progress_callback=translation_progress,
+                original_title=None
+            )
+            
+            if progress_callback:
+                await progress_callback(95, "翻译完成...")
+            
+            if result.get('success'):
+                if progress_callback:
+                    await progress_callback(100, "处理完成")
+                
+                return {
+                    'success': True,
+                    'translated_file': result['translated_file'],
+                    'source_language': source_language,
+                    'target_language': target_language,
+                    'translation_stats': result.get('stats', {})
+                }
+            else:
+                return {
+                    'success': False,
+                    'error': result.get('error', '翻译失败')
+                }
+                
+        except Exception as e:
+            logger.error(f"内部翻译处理失败: {e}")
+            return {'success': False, 'error': str(e)}
     
-    # =============================================================
-    # 辅助功能接口
-    # =============================================================
+    def _validate_url(self, url: str) -> bool:
+        """验证URL格式"""
+        try:
+            from urllib.parse import urlparse
+            result = urlparse(url)
+            return all([result.scheme, result.netloc])
+        except Exception:
+            return False
     
-    def get_supported_subtitle_formats(self) -> List[str]:
-        """获取支持的字幕格式"""
-        return self.file_handler.get_supported_formats()
+    def _is_task_cancelled(self, task_id: str) -> bool:
+        """检查任务是否被取消"""
+        try:
+            return task_manager.is_cancelled(task_id)
+        except Exception:
+            return False
     
-    def get_quality_options(self) -> Dict[str, str]:
-        """获取质量选项"""
+    def _get_beam_size(self, quality_mode: str) -> int:
+        """根据质量模式获取beam size"""
+        quality_map = {'speed': 1, 'balance': 3, 'quality': 5}
+        return quality_map.get(quality_mode, 3)
+    
+    def _get_best_of(self, quality_mode: str) -> int:
+        """根据质量模式获取best of参数"""
+        quality_map = {'speed': 1, 'balance': 3, 'quality': 5}
+        return quality_map.get(quality_mode, 3)
+    
+    # 兼容性方法
+    async def generate_subtitles(self, *args, **kwargs):
+        """兼容旧API的方法"""
+        return await self.process_from_file(*args, **kwargs)
+    
+    async def generate_subtitles_from_url(self, *args, **kwargs):
+        """兼容旧API的方法"""
+        return await self.process_from_url(*args, **kwargs)
+    
+    async def translate_subtitles(self, *args, **kwargs):
+        """兼容旧API的方法"""
+        return await self.translate_subtitle_file(*args, **kwargs)
+
+    # 工具方法
+    def get_supported_languages(self) -> Dict[str, str]:
+        """获取支持的语言列表"""
         return {
-            "large-v3": "最高品质（faster-whisper + SentencePiece）",
-            "large": "高品质",
-            "medium": "中等品质",
-            "base": "基础品质",
-            "small": "较低品质",
-            "tiny": "最低品质"
+            'auto': '自动检测',
+            'zh': '中文', 'en': '英语', 'ja': '日语', 'ko': '韩语',
+            'fr': '法语', 'de': '德语', 'es': '西班牙语', 'it': '意大利语',
+            'pt': '葡萄牙语', 'ru': '俄语', 'ar': '阿拉伯语', 'hi': '印地语'
         }
     
-    # =============================================================
-    # 私有辅助方法（保持兼容性）
-    # =============================================================
+    def get_supported_models(self) -> Dict[str, str]:
+        """获取支持的模型列表"""
+        return {
+            'large-v3': '最高质量 (推荐)',
+            'large': '高质量',
+            'medium': '中等质量',
+            'base': '基础质量', 
+            'small': '较低质量',
+            'tiny': '最低质量'
+        }
     
-    def _parse_srt_file(self, srt_path: str) -> List[Dict]:
-        """解析SRT字幕文件（兼容性方法）"""
-        return self.file_handler.parse_srt_file(srt_path)
-    
-    def _save_srt_file(self, subtitles: List[Dict], output_path: str):
-        """保存SRT字幕文件（兼容性方法）"""
-        return self.file_handler.save_srt_file(subtitles, output_path)
-    
-    def _sanitize_filename(self, filename: str, max_length: int = 200, default_name: str = "subtitle") -> str:
-        """清理文件名（兼容性方法）"""
-        return self.file_handler.sanitize_filename(filename, max_length, default_name)
-    
-    def _format_timestamp(self, seconds: float) -> str:
-        """格式化时间戳（兼容性方法）"""
-        return self.file_handler.format_timestamp(seconds)
-    
-    # =============================================================
-    # 模型管理相关方法（委托给模型管理器）
-    # =============================================================
-    
-    def _load_whisper_model(self, model_size: str = None):
-        """加载Whisper模型（兼容性方法）"""
-        return self.model_manager.load_model(model_size)
-    
-    def _get_model_specific_options(self, model_size: str, language: str) -> dict:
-        """获取模型特定选项（兼容性方法）"""
-        return self.model_manager.get_model_specific_options(model_size, language)
-    
-    def _get_retry_options(self, model_size: str, language: str) -> dict:
-        """获取重试选项（兼容性方法）"""
-        return self.model_manager.get_retry_options(model_size, language)
-    
-    # =============================================================
-    # 音频处理相关方法（委托给音频处理器）
-    # =============================================================
-    
-    async def _extract_audio(self, video_path: str) -> str:
-        """从视频中提取音频（兼容性方法）"""
-        return await self.audio_processor.extract_audio(video_path)
-    
-    # =============================================================
-    # 翻译相关方法（委托给翻译器）
-    # =============================================================
-    
-    def detect_language(self, text: str) -> str:
-        """检测文本语言（兼容性方法）"""
-        return self.translator.detect_language(text)
-    
-    async def translate_text(self, text: str, target_lang: str = "zh", source_lang: str = "auto") -> str:
-        """翻译文本（兼容性方法）"""
-        return await self.translator.translate_text(text, target_lang, source_lang)
-    
-    async def batch_translate(self, texts: List[str], target_language: str = "zh") -> List[str]:
-        """批量翻译（兼容性方法）"""
-        return await self.translator.batch_translate(texts, target_language)
+    def get_quality_modes(self) -> Dict[str, str]:
+        """获取质量模式列表"""
+        return {
+            'quality': '最高质量 (速度较慢)',
+            'balance': '平衡模式 (推荐)',
+            'speed': '快速模式 (质量较低)'
+        }
 
 
 # =============================================================
